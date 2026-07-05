@@ -1,0 +1,1019 @@
+SPARKCORE - STATUS OFICIAL DO PROJETO
+Atualizado em: 05/07/2026
+
+Este arquivo e a fonte principal para retomar o projeto.
+Historico antigo, comandos repetidos e registros de tentativa foram removidos.
+
+
+1. VISAO DO PRODUTO
+
+Nome do sistema:
+- SparkCore
+
+Sigla:
+- SC
+
+Empresa:
+- Sparkware
+
+Objetivo:
+- Sistema desktop WPF para cadastro de clientes, profissionais/salas, agenda de consultas, calendario, configuracoes e geracao inicial de PDF/laudo.
+- Funcionamento local offline-first com SQLite.
+- Sincronizacao automatica com API quando houver login e API disponivel.
+- API ASP.NET Core com MySQL para autenticacao, empresas, usuarios, e recebimento dos snapshots do WPF.
+
+Marca d'agua no sistema:
+- Feito com amor pela Sparkware.
+
+
+2. CAMINHOS PRINCIPAIS
+
+API:
+- C:\Users\krist\RetaguardaAgendamentoAPI
+- Projeto: C:\Users\krist\RetaguardaAgendamentoAPI\RetaguardaAgendamentoAPI
+- Solution: C:\Users\krist\RetaguardaAgendamentoAPI\RetaguardaAgendamentoAPI.sln
+
+WPF:
+- C:\Users\krist\AgendamentoWpfApp
+- Projeto: C:\Users\krist\AgendamentoWpfApp\AgendamentoWpfApp.csproj
+- Solution: C:\Users\krist\AgendamentoWpfApp\AgendamentoWpfApp.sln
+
+Banco local da API:
+- Docker Compose: C:\Users\krist\RetaguardaAgendamentoAPI\docker-compose.mysql.yml
+- Container: agenda-db-mysql
+- Porta host: 3308
+- MySQL container: 3306
+
+Publish de teste do WPF:
+- Framework-dependent: C:\tmp\AgendamentoWpfApp-publish-test
+- Self-contained single file: C:\tmp\AgendamentoWpfApp-selfcontained-test
+- Executavel self-contained: C:\tmp\AgendamentoWpfApp-selfcontained-test\AgendamentoWpfApp.exe
+- Tamanho aproximado: 169 MB
+
+Publish de teste da API:
+- C:\tmp\RetaguardaAgendamentoAPI-publish-test
+
+
+3. ESTADO OPERACIONAL ATUAL
+
+API local:
+- URL padrao: http://localhost:5000
+- Processo em execucao no momento da ultima verificacao:
+  - RetaguardaAgendamentoAPI.exe
+  - PID 24920
+- Validacao executada:
+  - GET http://localhost:5000/auth/me
+  - Resultado esperado: HTTP 401 sem token
+  - Interpretacao: API esta no ar e protegendo endpoint autenticado.
+
+MySQL local:
+- Container agenda-db-mysql esta healthy.
+- Porta local 3308 mapeada para 3306 do container.
+- Banco administrativo: retaguarda_agendamento
+- Banco operacional da agenda: agenda_operacional
+
+WPF:
+- Login sem dados preenchidos automaticamente.
+- Tela de login aprovada visualmente.
+- Nome visual do sistema definido como SparkCore.
+- Cadastro de cliente implementado.
+- Agenda/consultas implementada.
+- Calendario implementado.
+- Bloqueio de conflito de horario implementado.
+- Profissionais/salas implementados.
+- Configuracoes substituiram a antiga secao de sincronizacao.
+- PDF/laudo exemplo implementado apenas para teste inicial.
+- Sincronizacao automatica implementada, sem botao manual.
+- Backup local do SQLite implementado:
+  - backup automatico diario apos migrations;
+  - backup manual em Configuracoes;
+  - abertura da pasta de dados e da pasta de backups;
+  - retencao simples dos 10 backups mais recentes.
+
+
+4. COMO RODAR PARA TESTE LOCAL
+
+Subir MySQL:
+
+cd C:\Users\krist\RetaguardaAgendamentoAPI
+docker compose -f docker-compose.mysql.yml up -d
+
+Subir API em CMD visivel:
+
+cd C:\Users\krist\RetaguardaAgendamentoAPI
+dotnet run --project RetaguardaAgendamentoAPI\RetaguardaAgendamentoAPI.csproj --urls http://localhost:5000
+
+Validar API:
+
+GET http://localhost:5000/auth/me
+
+Resultado correto sem token:
+- HTTP 401
+
+Rodar WPF via projeto:
+
+cd C:\Users\krist\AgendamentoWpfApp
+dotnet run --project AgendamentoWpfApp.csproj
+
+Rodar WPF instalado/publish:
+
+C:\tmp\AgendamentoWpfApp-selfcontained-test\AgendamentoWpfApp.exe
+
+Observacao importante:
+- Se o WPF estiver no mesmo computador da API local, ele usa http://localhost:5000 automaticamente.
+- Se o WPF estiver em outro computador, localhost nao serve. Nesse caso configurar:
+  AGENDAMENTO_RETAGUARDA_URL=http://IP-DO-SERVIDOR:5000
+- Futuramente, com dominio:
+  AGENDAMENTO_RETAGUARDA_URL=https://api.dominio.com.br
+
+
+5. CONFIGURACOES IMPORTANTES
+
+WPF:
+- A URL da API fica em:
+  C:\Users\krist\AgendamentoWpfApp\AppSettings.cs
+- Variavel de ambiente suportada:
+  AGENDAMENTO_RETAGUARDA_URL
+- Padrao atual:
+  http://localhost:5000
+
+API:
+- Configuracao principal:
+  C:\Users\krist\RetaguardaAgendamentoAPI\RetaguardaAgendamentoAPI\appsettings.json
+- Configuracao de desenvolvimento:
+  C:\Users\krist\RetaguardaAgendamentoAPI\RetaguardaAgendamentoAPI\appsettings.Development.json
+
+Atencao:
+- appsettings.Development.json tem configuracao sensivel de e-mail e nao deve ir para ambiente publico.
+- Para deploy real, secrets de e-mail, banco e URLs precisam sair do arquivo versionado e ir para variaveis de ambiente, User Secrets ou configuracao segura do servidor.
+
+
+6. VALIDACOES JA REALIZADAS
+
+Build WPF:
+
+dotnet build C:\Users\krist\AgendamentoWpfApp\AgendamentoWpfApp.sln --ignore-failed-sources
+
+Resultado registrado:
+- Sucesso.
+- 0 erros.
+- 0 avisos.
+
+Testes unitarios WPF:
+
+dotnet run --project C:\Users\krist\AgendamentoWpfApp\AgendamentoWpfApp.Tests\AgendamentoWpfApp.Tests.csproj
+
+Resultado registrado:
+- Testes unitarios concluidos com sucesso.
+
+Smoke WPF:
+
+cd C:\Users\krist\RetaguardaAgendamentoAPI
+powershell -ExecutionPolicy Bypass -File .\smoke-runner.ps1 -WpfOnly
+
+Resultado registrado:
+- Build WPF concluido.
+- Build smoke concluido.
+- Smoke SQLite concluido com sucesso.
+
+Publish WPF framework-dependent:
+
+dotnet publish C:\Users\krist\AgendamentoWpfApp\AgendamentoWpfApp.csproj -c Release -r win-x64 --self-contained false -o C:\tmp\AgendamentoWpfApp-publish-test
+
+Resultado:
+- Publish gerado com sucesso.
+
+Publish WPF self-contained single file:
+
+dotnet publish C:\Users\krist\AgendamentoWpfApp\AgendamentoWpfApp.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o C:\tmp\AgendamentoWpfApp-selfcontained-test
+
+Resultado:
+- Publish gerado com sucesso.
+- Arquivo principal: AgendamentoWpfApp.exe
+- Tamanho aproximado: 169 MB.
+
+Publish API:
+
+dotnet publish C:\Users\krist\RetaguardaAgendamentoAPI\RetaguardaAgendamentoAPI\RetaguardaAgendamentoAPI.csproj -c Release -o C:\tmp\RetaguardaAgendamentoAPI-publish-test
+
+Resultado:
+- Publish gerado com sucesso.
+
+
+7. ESTRUTURA ATUAL DO WPF
+
+Pontos fortes:
+- Projeto compila.
+- Existe suite de testes unitarios sem depender de pacotes externos.
+- Existe smoke test WPF com SQLite.
+- DI foi introduzido no App.xaml.cs.
+- Dashboard foi quebrado em arquivos parciais por area.
+- Stores locais foram movidos para Data\Stores.
+- Regras de validacao foram isoladas.
+- AuthApiService centraliza login, criacao de conta e confirmacao de e-mail.
+- SyncStatusStore persiste estado da sincronizacao e loga falhas.
+- AppSettings permite trocar URL da API por variavel de ambiente.
+- LocalSqliteBackupService protege o agenda.sqlite com backup diario/manual.
+
+Arquivos relevantes:
+- C:\Users\krist\AgendamentoWpfApp\App.xaml.cs
+- C:\Users\krist\AgendamentoWpfApp\AppSettings.cs
+- C:\Users\krist\AgendamentoWpfApp\DashboardWindow.xaml.cs
+- C:\Users\krist\AgendamentoWpfApp\DashboardWindow.Clientes.cs
+- C:\Users\krist\AgendamentoWpfApp\DashboardWindow.Agenda.cs
+- C:\Users\krist\AgendamentoWpfApp\DashboardWindow.Profissionais.cs
+- C:\Users\krist\AgendamentoWpfApp\DashboardWindow.Laudos.cs
+- C:\Users\krist\AgendamentoWpfApp\DashboardWindow.Navigation.cs
+- C:\Users\krist\AgendamentoWpfApp\Services\AuthApiService.cs
+- C:\Users\krist\AgendamentoWpfApp\Services\SyncStatusStore.cs
+- C:\Users\krist\AgendamentoWpfApp\Services\AutomaticAgendaSyncCoordinator.cs
+- C:\Users\krist\AgendamentoWpfApp\Data\Stores
+- C:\Users\krist\AgendamentoWpfApp\AgendamentoWpfApp.Tests
+- C:\Users\krist\AgendamentoWpfApp\AgendamentoWpfApp.Smoke
+
+Pontos ainda fracos:
+- Falta instalador oficial versionado.
+- Falta script Inno Setup salvo no repositorio.
+- Icone/app branding final no executavel implementado com SparkCore.ico.
+- Falta fluxo de primeira configuracao mais amigavel para URL da API, caso nao seja localhost.
+- Falta restore local assistido do SQLite.
+- Falta log local consolidado para suporte tecnico.
+- Falta teste de UI real de clique/tela.
+
+
+8. ESTRUTURA ATUAL DA API
+
+Pontos fortes:
+- ASP.NET Core .NET 8.
+- MySQL funcionando via Docker.
+- Autenticacao por token proprio armazenado em banco.
+- Senha com salt/hash.
+- Confirmacao de e-mail implementada.
+- Endpoint de snapshot protegido por token.
+- Banco operacional recebe snapshots por empresa/dispositivo.
+- API publica localmente em http://localhost:5000.
+- Publish Release gerado com sucesso.
+
+Arquivos relevantes:
+- C:\Users\krist\RetaguardaAgendamentoAPI\RetaguardaAgendamentoAPI\Program.cs
+- C:\Users\krist\RetaguardaAgendamentoAPI\RetaguardaAgendamentoAPI\Startup.cs
+- C:\Users\krist\RetaguardaAgendamentoAPI\RetaguardaAgendamentoAPI\Controllers\AuthController.cs
+- C:\Users\krist\RetaguardaAgendamentoAPI\RetaguardaAgendamentoAPI\Controllers\Sincronizacao\AgendaSnapshotController.cs
+- C:\Users\krist\RetaguardaAgendamentoAPI\RetaguardaAgendamentoAPI\Services\AuthService.cs
+- C:\Users\krist\RetaguardaAgendamentoAPI\RetaguardaAgendamentoAPI\Services\Sincronizacao\AgendaSnapshotService.cs
+- C:\Users\krist\RetaguardaAgendamentoAPI\mysql-init\retaguarda-agendamento.sql
+- C:\Users\krist\RetaguardaAgendamentoAPI\docker-compose.mysql.yml
+
+Pontos ainda fracos:
+- appsettings.Development.json contem segredo de e-mail.
+- CORS esta aberto com AllowAnyOrigin.
+- Connection string ainda aponta para localhost:3308.
+- API usa SQL direto e ajuste dinamico de schema em alguns pontos.
+- Falta estrategia formal de migrations/versionamento do MySQL.
+- Falta readiness endpoint simples para monitoramento.
+- Falta politica de logs estruturados para producao.
+- Falta rate limit nos endpoints publicos de auth.
+- Falta plano de HTTPS/reverse proxy.
+- Falta configuracao real de dominio/subdominio.
+
+
+9. SITUACAO DO DOMINIO E DEPLOY WEB
+
+Estado atual:
+- Nao existe dominio configurado no projeto.
+- Apenas localhost foi encontrado nas configs e documentacao.
+- O cliente informou que possui um dominio web que sera usado para site, mas ainda nao confirmou dados tecnicos.
+
+Conclusao:
+- E possivel usar o mesmo dominio para site e API, desde que haja controle de DNS.
+- Padrao recomendado:
+  - Site: https://www.dominio.com.br
+  - API: https://api.dominio.com.br
+
+Informacoes que ainda precisam ser confirmadas com o cliente:
+- Qual e o dominio.
+- Quem controla o DNS.
+- Qual hospedagem sera usada.
+- Se a hospedagem suporta ASP.NET Core .NET 8.
+- Se existe VPS, Docker, Azure App Service ou apenas hospedagem compartilhada.
+- Se sera possivel criar subdominio api.dominio.com.br.
+- Se o MySQL sera no mesmo servidor, banco gerenciado ou container.
+
+Posicao tecnica:
+- Hospedagem comum cPanel/PHP nao deve ser assumida como compativel com esta API.
+- Melhor caminho tecnico para a API:
+  1. VPS Linux com Nginx + Kestrel + MySQL.
+  2. VPS Windows com IIS + ASP.NET Core Hosting Bundle + MySQL.
+  3. Azure App Service + Azure Database for MySQL.
+  4. Docker em servidor com reverse proxy.
+
+
+10. INSTALADOR
+
+Estado:
+- O publish self-contained do WPF ja foi gerado.
+- O Inno Setup pode criar instalador usando:
+  C:\tmp\AgendamentoWpfApp-selfcontained-test\AgendamentoWpfApp.exe
+
+Script base recomendado para Inno Setup:
+
+#define MyAppName "SparkCore"
+#define MyAppVersion "1.0.0"
+#define MyAppPublisher "Sparkware"
+#define MyAppExeName "AgendamentoWpfApp.exe"
+
+[Setup]
+AppId={{6B3D1C5A-8944-4C5C-94A4-27D68897E3D2}
+AppName={#MyAppName}
+AppVersion={#MyAppVersion}
+AppPublisher={#MyAppPublisher}
+DefaultDirName={localappdata}\Programs\SparkCore
+DefaultGroupName=SparkCore
+DisableProgramGroupPage=yes
+OutputDir=C:\tmp\SparkCoreInstaller
+OutputBaseFilename=SparkCore-Setup
+Compression=lzma
+SolidCompression=yes
+WizardStyle=modern
+PrivilegesRequired=lowest
+UninstallDisplayName=SparkCore
+SetupLogging=yes
+
+[Languages]
+Name: "brazilianportuguese"; MessagesFile: "compiler:Languages\BrazilianPortuguese.isl"
+
+[Tasks]
+Name: "desktopicon"; Description: "Criar atalho na Area de Trabalho"; GroupDescription: "Atalhos:"; Flags: unchecked
+
+[Files]
+Source: "C:\tmp\AgendamentoWpfApp-selfcontained-test\AgendamentoWpfApp.exe"; DestDir: "{app}"; Flags: ignoreversion
+
+[Icons]
+Name: "{group}\SparkCore"; Filename: "{app}\{#MyAppExeName}"
+Name: "{autodesktop}\SparkCore"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+
+[Run]
+Filename: "{app}\{#MyAppExeName}"; Description: "Abrir SparkCore"; Flags: nowait postinstall skipifsilent
+
+Observacoes:
+- Para teste local, instalador pode apontar para localhost implicitamente.
+- Para teste em outra maquina, sera necessario configurar AGENDAMENTO_RETAGUARDA_URL.
+- Antes de entregar para cliente, salvar o script .iss dentro do projeto e versionar o numero.
+
+
+11. DECISAO TECNICA ATUAL
+
+O projeto esta bom para:
+- Teste local com API e MySQL rodando na maquina de desenvolvimento.
+- Teste de instalador em uma maquina local.
+- Validacao funcional de cadastro/login/agenda/sync.
+
+O projeto ainda nao esta pronto para:
+- Deploy publico definitivo.
+- Cliente usando em producao sem rotina de backup.
+- Multimaquinas sem configurar corretamente URL da API.
+- Garantia de recuperacao em caso de perda do SQLite local.
+- Escala real sem endurecimento da API e schema.
+
+
+12. PROXIMAS TASKS PRIORIZADAS
+
+TASK 1 - INSTALADOR OFICIAL DE TESTE
+
+Objetivo:
+- Transformar o publish WPF em um instalador reproduzivel.
+
+Entregas:
+- Criar pasta Installer no projeto WPF.
+- Salvar script SparkCore.iss.
+- Definir versao 1.0.0-test.
+- Gerar SparkCore-Setup.exe.
+- Instalar em maquina local.
+- Validar abrir, login, criar conta, cadastrar cliente e marcar consulta.
+
+Criterio de aceite:
+- Instalador instala sem erro.
+- Atalho criado.
+- SparkCore abre sem depender do Visual Studio.
+- App conversa com API local em http://localhost:5000.
+
+
+TASK 2 - CONFIGURACAO DE URL DA API NO INSTALADOR
+
+Objetivo:
+- Permitir que o instalador ou a configuracao do Windows defina a API usada pelo app.
+
+Entregas:
+- Definir estrategia:
+  - variavel de ambiente do usuario; ou
+  - arquivo config local em AppData; ou
+  - tela de configuracao dentro do SparkCore.
+- Para teste inicial, usar variavel:
+  AGENDAMENTO_RETAGUARDA_URL
+- Documentar como alterar de localhost para IP ou dominio.
+
+Criterio de aceite:
+- App instalado consegue apontar para outra API sem recompilar.
+
+
+TASK 3 - BACKUP LOCAL DO SQLITE
+
+Objetivo:
+- Proteger dados locais antes de testes maiores.
+
+Status em 05/07/2026:
+- Backup implementado no WPF.
+- Restore ainda nao implementado por seguranca, pois substituir o SQLite em uso exige fluxo assistido com confirmacao forte e fechamento das conexoes.
+
+Entregas:
+- Identificar caminho real do agenda.sqlite em AppData. FEITO
+- Criar rotina de backup automatico diario. FEITO
+- Criar botao em Configuracoes:
+  - Abrir pasta de dados. FEITO
+  - Gerar backup agora. FEITO
+  - Abrir pasta de backups. FEITO
+  - Restaurar backup, se aprovado. FEITO
+- Criar retencao simples, exemplo: manter ultimos 10 backups. FEITO
+
+Criterio de aceite:
+- Antes de mexer em producao/teste grande, existe copia recuperavel do banco local.
+- Validado em 05/07/2026:
+  - dotnet build C:\Users\krist\AgendamentoWpfApp\AgendamentoWpfApp.csproj --ignore-failed-sources
+  - dotnet run --project C:\Users\krist\AgendamentoWpfApp\AgendamentoWpfApp.Smoke\AgendamentoWpfApp.Smoke.csproj
+  - dotnet run --project C:\Users\krist\AgendamentoWpfApp\AgendamentoWpfApp.Tests\AgendamentoWpfApp.Tests.csproj
+  - restore assistido implementado em Configuracoes:
+    selecionar backup .sqlite da pasta de backups;
+    confirmar substituicao;
+    criar copia de seguranca do banco atual;
+    substituir agenda.sqlite;
+    reiniciar o SparkCore para recarregar o banco.
+
+
+TASK 4 - ENDURECER API PARA PRE-PRODUCAO
+
+Objetivo:
+- Preparar a API para rodar fora do computador local sem expor segredos.
+
+Status em 05/07/2026:
+- Parcialmente implementado.
+- Auditoria de seguranca aplicada em 05/07/2026:
+  - RetornoJsonErro nao expoe mais mensagem interna nem stack trace da excecao; erros 500 agora sao logados no servidor pelo AuthController.
+  - Senha minima subiu de 4 para 8 caracteres (API e validacao do WPF em CreateAccountWindow).
+  - AdminConnection deixou de usar root; criado usuario dedicado agenda_admin com privilegio minimo (ALL em agenda_operacional.*, SELECT/UPDATE em retaguarda_agendamento.EMPRESA).
+  - Criada migration mysql-migrations/002_create_agenda_admin_user.sql e incluido no mysql-init para instalacoes novas.
+  - ATENCAO: antes de subir a API novamente, rodar .\apply-mysql-migrations.ps1 com o MySQL ativo para criar o agenda_admin, senao o snapshot falha na conexao administrativa.
+- Segredo real de e-mail removido do appsettings.Development.json.
+- appsettings.Development.json configurado para nao entrar no publish.
+- CORS deixou de ser AllowAnyOrigin fixo e passou a usar Cors:AllowedOrigins.
+- Rate limit basico por IP aplicado nos endpoints /auth.
+- Criado endpoint GET /health com validacao de conexao MySQL.
+- Validado que /health responde 503 DEGRADED de forma controlada quando MySQL nao esta disponivel.
+- Logs claros adicionados para startup, health/MySQL, falha SMTP e snapshot da agenda.
+- Pendencias restantes dependem do ambiente real: origem CORS final, HTTPS/reverse proxy, dominio/subdominio e logs estruturados de producao.
+
+Entregas:
+- Remover segredo real do appsettings.Development.json ou garantir que nao sera publicado. FEITO
+- Configurar connection strings por variaveis de ambiente. SUPORTADO PELO .NET; manter defaults locais por enquanto
+- Configurar e-mail por variaveis de ambiente. SUPORTADO PELO .NET; segredo real removido
+- Restringir CORS. PARCIAL, configuravel por Cors:AllowedOrigins
+- Criar endpoint:
+  GET /health. FEITO
+- Criar logs claros de startup, erro de banco e erro de e-mail. FEITO
+- Revisar publish para nao carregar arquivo de desenvolvimento. FEITO
+
+Criterio de aceite:
+- API sobe com configuracao externa.
+- Nenhum segredo real fica em arquivo de publish.
+- /health responde OK quando banco esta acessivel.
+- Validado em 05/07/2026:
+  - dotnet build RetaguardaAgendamentoAPI.sln --ignore-failed-sources
+  - dotnet test RetaguardaAgendamentoAPI.sln --no-build --filter FullyQualifiedName~CnpjUtilsTests
+  - dotnet publish RetaguardaAgendamentoAPI\RetaguardaAgendamentoAPI.csproj -c Release -o C:\tmp\RetaguardaAgendamentoAPI-task4-publish-test-2
+  - publish contem appsettings.json e nao contem appsettings.Development.json
+  - GET http://127.0.0.1:5099/health sem MySQL ativo retornou HTTP 503 DEGRADED
+  - dotnet build RetaguardaAgendamentoAPI.sln --ignore-failed-sources
+  - powershell -ExecutionPolicy Bypass -File .\smoke-runner.ps1 -ApiOnly -SkipDotnetTests
+
+
+TASK 5 - DEFINIR ESTRATEGIA DE BANCO/MIGRATIONS
+
+Objetivo:
+- Parar de depender de schema solto antes do deploy.
+
+Status em 05/07/2026:
+- Estrategia definida: scripts SQL versionados.
+- Criada pasta mysql-migrations.
+- Criada migration inicial 001_baseline_schema.sql baseada no schema atual.
+- Criada tabela de controle retaguarda_agendamento.SCHEMA_MIGRATION.
+- Criado runner apply-mysql-migrations.ps1.
+- Runner aplica apenas migrations ainda nao registradas e tenta gerar backup em backups/mysql antes de aplicar.
+- EF Core migrations no MySQL foi descartado por enquanto para nao misturar com a API atual, que usa MySql.Data e SQL direto.
+
+Entregas:
+- Escolher estrategia oficial:
+  - manter SQL scripts versionados; ou FEITO
+  - migrar API para EF Core migrations. NAO ESCOLHIDO
+- Criar versao inicial do schema. FEITO
+- Criar procedimento de upgrade. FEITO
+- Criar seed minimo. NAO HA SEED DE DADOS OBRIGATORIO; CONTAS SAO CRIADAS VIA API
+- Criar rollback/backup antes de alteracao. PARCIAL, runner tenta dump antes de aplicar migrations
+
+Criterio de aceite:
+- Um servidor novo consegue ser preparado com comandos claros e repetiveis.
+- Validado em 05/07/2026:
+  - sintaxe PowerShell do apply-mysql-migrations.ps1 OK
+  - dotnet build RetaguardaAgendamentoAPI.sln --ignore-failed-sources
+  - aplicacao real das migrations depende de MySQL/Docker ativo
+
+
+TASK 6 - SINCRONIZACAO DELTA E CONFLITOS
+
+Objetivo:
+- Melhorar a sync para nao depender somente de snapshot completo.
+
+Entregas:
+- Criar endpoint delta na API.
+- Enviar apenas registros alterados desde ultima sincronizacao.
+- Registrar status por registro.
+- Tratar conflito por versao/data de alteracao.
+- Melhorar tela de status da sync.
+
+Criterio de aceite:
+- Sync grande fica mais leve.
+- Falha parcial nao obriga reenviar tudo sem controle.
+
+
+TASK 7 - LAUDOS/PDF FINAL
+
+Status:
+- Nao mexer agora, por decisao do projeto.
+
+Motivo:
+- Modelo final do PDF ainda nao existe.
+- Existe apenas modelo exemplo para teste.
+
+Quando retomar:
+- Cliente precisa fornecer modelo final.
+- Definir campos obrigatorios.
+- Definir template.
+- Definir pasta de saida.
+- Definir assinatura/logo.
+
+
+TASK 8 - QUALIDADE VISUAL FINAL DO WPF
+
+Objetivo:
+- Fechar visual com consistencia profissional antes de teste com usuario final.
+
+Entregas:
+- Revisar tamanhos em telas pequenas.
+- Garantir botoes sem sobreposicao.
+- Padronizar estilos em Styles.
+- Reduzir estilos duplicados em XAML.
+- Melhorar tela de cadastro para visao ampla.
+- Revisar calendario/consultas do dia.
+- Aplicar icone e nome SparkCore no executavel.
+  - Icone SparkCore.ico aplicado no executavel e janelas principais. FEITO
+
+Criterio de aceite:
+- App parece produto unico, nao telas isoladas.
+- Uso principal fica claro sem explicacao.
+
+
+13. ORDEM RECOMENDADA A PARTIR DE AGORA
+
+Status resumido em 05/07/2026:
+- TASK 1 - Instalador oficial de teste: feito/testado segundo confirmacao do projeto.
+- TASK 2 - URL da API no instalador: adiada; manter localhost ate confirmar dominio/hospedagem.
+- TASK 3 - Backup local SQLite: feito, incluindo restore assistido.
+- TASK 4 - Endurecer API: parcialmente feito; logs claros adicionados; pendem CORS final e HTTPS/reverse proxy em ambiente real.
+- TASK 5 - Migrations MySQL: estrategia definida, arquivos criados e baseline aplicada no MySQL local.
+- TASK 6 - Sincronizacao delta/conflitos: pendente.
+- TASK 7 - PDF/laudo final: pendente por falta do modelo do cliente.
+- TASK 8 - Qualidade visual final WPF: pendente.
+- Icone/branding basico do SparkCore aplicado no WPF:
+  - C:\Users\krist\AgendamentoWpfApp\Assets\SparkCore.ico
+  - C:\Users\krist\AgendamentoWpfApp\Assets\SparkCore-256.png
+  - ApplicationIcon configurado no AgendamentoWpfApp.csproj
+  - Icon configurado em MainWindow, CreateAccountWindow e DashboardWindow
+
+Prioridade imediata:
+1. Rodar teste instalado do SparkCore com API local, quando precisar repetir a validacao:
+   - abrir app instalado;
+   - login/criar conta;
+   - cadastrar cliente;
+   - cadastrar profissional/sala;
+   - marcar consulta;
+   - conferir sync automatica;
+   - conferir backup em Configuracoes.
+2. Gerar novo instalador com a versao atualizada depois dos ajustes finais.
+3. Confirmar se o teste sera somente na maquina local ou em outra maquina na rede.
+
+Prioridade antes de teste com cliente:
+1. Confirmar se o teste sera somente na maquina local ou em outra maquina na rede.
+2. Se for outra maquina, configurar AGENDAMENTO_RETAGUARDA_URL com IP do servidor local.
+3. Validar firewall/porta 5000 se API precisar ser acessada por outro computador.
+4. Garantir backup local funcionando antes de inserir dados reais.
+5. Gerar novo instalador com versao atualizada depois dos ajustes finais.
+6. Validar fluxo completo instalado, nao apenas via Visual Studio/dotnet run.
+
+Prioridade para pre-producao/deploy externo:
+1. Confirmar dominio do cliente.
+2. Confirmar quem controla DNS.
+3. Confirmar hospedagem: VPS Linux, VPS Windows, Azure, Docker ou hospedagem compartilhada.
+4. Definir subdominio recomendado:
+   api.dominio.com.br
+5. Configurar HTTPS/reverse proxy.
+6. Definir Cors:AllowedOrigins real.
+7. Mover connection strings e e-mail para variaveis de ambiente/secrets do servidor.
+8. Rodar migrations MySQL no servidor.
+9. Validar GET /health com banco acessivel retornando HTTP 200 OK.
+
+Futuras evolucoes tecnicas:
+1. Sincronizacao delta:
+   - enviar somente registros alterados desde a ultima sync;
+   - retornar aceitos/rejeitados/conflitos por registro;
+   - reduzir dependencia de snapshot completo.
+2. Conflitos:
+   - controlar versao/data de alteracao por registro;
+   - detectar edicoes concorrentes entre dispositivos;
+   - criar tela/status para conflitos pendentes.
+3. Modulos da API:
+   - criar contratos especificos para Clientes, Agenda, Profissionais/Salas e Servicos;
+   - reduzir dependencia de schema dinamico por snapshot.
+4. Qualidade visual final:
+   - revisar telas pequenas;
+   - padronizar estilos;
+   - aplicar icone/branding final no executavel.
+5. PDF/laudo final:
+   - aguardar modelo do cliente;
+   - mapear campos obrigatorios;
+   - gerar PDF final com template real.
+6. Atualizacao automatica:
+   - usar endpoint /updates/sparkcore/latest;
+   - publicar pacote versionado;
+   - validar updater fora do ambiente de desenvolvimento.
+
+
+14. COMANDOS RAPIDOS
+
+Ver MySQL:
+
+docker ps --filter "name=agenda-db-mysql"
+
+Subir MySQL:
+
+docker compose -f C:\Users\krist\RetaguardaAgendamentoAPI\docker-compose.mysql.yml up -d
+
+Subir API:
+
+cd C:\Users\krist\RetaguardaAgendamentoAPI
+dotnet run --project RetaguardaAgendamentoAPI\RetaguardaAgendamentoAPI.csproj --urls http://localhost:5000
+
+Build WPF:
+
+dotnet build C:\Users\krist\AgendamentoWpfApp\AgendamentoWpfApp.sln --ignore-failed-sources
+
+Testes WPF:
+
+dotnet run --project C:\Users\krist\AgendamentoWpfApp\AgendamentoWpfApp.Tests\AgendamentoWpfApp.Tests.csproj
+
+Smoke WPF:
+
+cd C:\Users\krist\RetaguardaAgendamentoAPI
+powershell -ExecutionPolicy Bypass -File .\smoke-runner.ps1 -WpfOnly
+
+Publish WPF self-contained:
+
+dotnet publish C:\Users\krist\AgendamentoWpfApp\AgendamentoWpfApp.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o C:\tmp\AgendamentoWpfApp-selfcontained-test
+
+Publish API:
+
+dotnet publish C:\Users\krist\RetaguardaAgendamentoAPI\RetaguardaAgendamentoAPI\RetaguardaAgendamentoAPI.csproj -c Release -o C:\tmp\RetaguardaAgendamentoAPI-publish-test
+
+
+15. PARECER DE ARQUITETURA
+
+Parecer:
+- A base evoluiu bem para uma prova real de uso.
+- O WPF ja esta em condicao de teste instalado local.
+- A API ja serve como backend local e base para futuro deploy.
+- A parte mais urgente agora nao e criar feature nova; e empacotar, proteger dados locais e preparar API para ambiente externo.
+
+Risco maior:
+- Testar com cliente em outra maquina sem configurar corretamente URL da API/firewall.
+- Restaurar SQLite sem fluxo assistido seguro.
+- Fazer deploy externo sem dominio/hospedagem/DNS confirmados.
+
+Proxima acao recomendada:
+- Subir MySQL local, aplicar migrations e executar smoke completo da API.
+
+
+16. ROADMAP WPF / SPARKCORE DESKTOP - VISAO TECH LEAD
+
+Escopo desta secao:
+- Sistema desktop WPF SparkCore, sem considerar novas tasks da API.
+- Objetivo: orientar continuidade do produto quando a IA/projeto for retomado.
+
+Estado atual do WPF:
+- Login, criacao de conta e confirmacao de e-mail usando API.
+- Dashboard com Clientes, Agenda, Profissionais/Salas, Configuracoes e Laudos exemplo.
+- SQLite local com EF Core migrations.
+- Cadastro de cliente, profissional/sala e consulta.
+- Bloqueio de conflito de horario.
+- Sincronizacao automatica por snapshot completo.
+- Backup local automatico/manual.
+- Restore assistido do SQLite implementado.
+- Instalador Inno Setup funcionando.
+- Icone/branding basico aplicado:
+  - Assets\SparkCore.ico
+  - Assets\SparkCore-256.png
+- Updater existe e e disparado ao fechar o app pelo App.xaml.cs.
+
+Risco tecnico principal:
+- O app ja funciona para teste instalado/local, mas ainda precisa fechar distribuicao, atualizacao, log local, configuracao de API e acabamento visual antes de ser tratado como produto pronto para cliente.
+
+
+TASK WPF 1 - FECHAR FLUXO DE UPDATE AUTOMATICO
+
+Objetivo:
+- Garantir que uma versao instalada consiga atualizar para outra sem reinstalacao manual.
+
+Estado atual:
+- Existe SparkCore.Updater.exe.
+- Existe endpoint da API:
+  GET /updates/sparkcore/latest
+- Existe script:
+  C:\Users\krist\AgendamentoWpfApp\scripts\build-update-package.ps1
+- O update e disparado ao fechar o app via SparkCoreUpdateLauncher no App.xaml.cs.
+
+Entregas:
+- Gerar pacote de update 1.0.2.
+- Publicar ZIP local/teste.
+- Configurar manifesto no endpoint /updates/sparkcore/latest.
+- Validar updater ao fechar o app.
+- Validar rollback se o ZIP estiver invalido.
+- Logar resultado em:
+  %LOCALAPPDATA%\RetaguardaAgendamento\logs
+
+Criterio de aceite:
+- Instalar SparkCore 1.0.1.
+- Fechar o app.
+- Updater aplica 1.0.2.
+- Ao abrir novamente, o app ja esta atualizado.
+
+
+TASK WPF 2 - REGERAR INSTALADOR OFICIAL COM ICONE E VERSAO
+
+Objetivo:
+- Ter build instalavel limpo com branding atual.
+
+Estado atual:
+- Instalador 1.0.1 foi gerado com sucesso em:
+  C:\Users\krist\AgendamentoWpfApp\artifacts\installer\SparkCore-Setup-1.0.1.exe
+- Icone SparkCore.ico aplicado no executavel e janelas principais.
+
+Entregas:
+- Atualizar versao para 1.0.1 ou 1.0.2 conforme proximo release.
+- Gerar novo instalador.
+- Instalar por cima da versao anterior.
+- Validar icone no executavel.
+- Validar icone no atalho da Area de Trabalho.
+- Validar icone na barra de tarefas.
+- Validar icone no Alt-Tab.
+
+Criterio de aceite:
+- Usuario final ve SparkCore com icone correto em todos os pontos visuais do Windows.
+
+
+TASK WPF 3 - TESTE DE RESTORE SQLITE EM APP INSTALADO
+
+Objetivo:
+- Garantir que restore nao corrompe dados reais.
+
+Estado atual:
+- Restore assistido ja foi implementado em Configuracoes.
+- Fluxo atual:
+  - selecionar backup .sqlite da pasta de backups;
+  - confirmar substituicao;
+  - fechar conexoes;
+  - criar copia de seguranca do banco atual;
+  - substituir agenda.sqlite;
+  - reiniciar o SparkCore.
+
+Entregas:
+- Criar cliente e consulta no app instalado.
+- Gerar backup manual.
+- Alterar dados.
+- Restaurar backup.
+- Confirmar que app reinicia.
+- Confirmar que dados voltam ao estado do backup.
+- Confirmar que backup de seguranca agenda-before-restore-*.sqlite e criado.
+
+Criterio de aceite:
+- Restore recupera estado anterior sem erro e sem travar o SQLite.
+
+
+TASK WPF 4 - LOG LOCAL CONSOLIDADO DO WPF
+
+Objetivo:
+- Facilitar suporte tecnico sem depender do Visual Studio.
+
+Entregas:
+- Criar arquivo:
+  %LOCALAPPDATA%\RetaguardaAgendamento\logs\sparkcore-app.log
+- Logar startup.
+- Logar login.
+- Logar migrations SQLite.
+- Logar backup.
+- Logar restore.
+- Logar sync.
+- Logar disparo do update launcher.
+- Logar erros nao tratados.
+- Adicionar captura global de excecoes WPF.
+- Criar botao em Configuracoes:
+  Abrir pasta de logs.
+
+Criterio de aceite:
+- Qualquer erro importante do WPF fica registrado em AppData.
+- Suporte consegue pedir a pasta de logs e entender o problema.
+
+
+TASK WPF 5 - CONFIGURACAO DA URL DA API DENTRO DO APP
+
+Objetivo:
+- Parar de depender apenas de variavel de ambiente para maquinas fora do servidor local.
+
+Estado atual:
+- App usa:
+  AGENDAMENTO_RETAGUARDA_URL
+- Fallback atual:
+  http://localhost:5000
+
+Entregas:
+- Criar arquivo local:
+  %LOCALAPPDATA%\RetaguardaAgendamento\sparkcore-settings.json
+- Criar tela/campo em Configuracoes para editar URL da API.
+- Validar URL.
+- Criar botao:
+  Testar conexao.
+- Definir prioridade de leitura:
+  1. arquivo local sparkcore-settings.json
+  2. variavel AGENDAMENTO_RETAGUARDA_URL
+  3. http://localhost:5000
+- Documentar como trocar localhost por IP ou dominio.
+
+Criterio de aceite:
+- App instalado aponta para IP/dominio sem recompilar e sem mexer manualmente nas variaveis do Windows.
+
+
+TASK WPF 6 - TELA DE STATUS DO UPDATE
+
+Objetivo:
+- Deixar o update automatico menos invisivel para suporte.
+
+Entregas:
+- Mostrar versao atual em Configuracoes.
+- Mostrar ultima checagem/update.
+- Mostrar se update esta habilitado no manifesto.
+- Criar botao:
+  Verificar atualizacao ao fechar.
+- Logar motivo quando nao atualiza:
+  - manifesto desabilitado;
+  - sem PackageUrl;
+  - versao remota nao e maior;
+  - erro de download;
+  - hash invalido;
+  - sem permissao de escrita.
+
+Criterio de aceite:
+- Suporte consegue saber por que o app nao atualizou.
+
+
+TASK WPF 7 - QUALIDADE VISUAL FINAL COM PALETA DA EMPRESA
+
+Objetivo:
+- Deixar o WPF com cara de produto unico SparkCore/Sparkware.
+
+Paleta desejada:
+- Bege.
+- Laranja.
+- Preto.
+- Branco.
+
+Status em 05/07/2026:
+- Primeira passada da paleta aplicada em todo o sistema:
+  - Styles/Colors.xaml com a paleta oficial (ink #1C1713, bege #F6F1E7, laranja #E8720F, hover #C95E0C, soft #FCEBD9).
+  - Login (MainWindow) redesenhado: card flutuante com sombra, painel escuro com gradiente quente, logo e detalhes laranja, campos com foco laranja e cantos arredondados.
+  - CreateAccountWindow com a mesma identidade.
+  - DashboardWindow: header com logo SC laranja, sidebar bege, nav com indicador laranja no hover.
+  - Views (Clientes/Agenda/Profissionais/Laudos/Configuracoes): paineis com cantos 12px e fundos bege.
+  - Verde antigo removido do code-behind: SparkPalette.cs centraliza Success/Error para ViewModels e status.
+- Falta: revisar telas pequenas, DataGrid header/ComboBox com template proprio, validacao visual em maquina real.
+
+Entregas:
+- Revisar Login.
+- Revisar Criar Conta.
+- Revisar Clientes.
+- Revisar Agenda.
+- Revisar Profissionais/Salas.
+- Revisar Configuracoes.
+- Aplicar paleta final.
+- Remover verde antigo gradualmente.
+- Padronizar botoes.
+- Padronizar cards/painels.
+- Padronizar bordas.
+- Padronizar inputs.
+- Padronizar mensagens de erro/sucesso.
+- Garantir telas em resolucao minima sem sobreposicao.
+
+Criterio de aceite:
+- Visual consistente com marca SparkCore/Sparkware.
+- Sistema nao parece varias telas isoladas.
+
+
+TASK WPF 8 - TESTE DE UI MANUAL GUIADO
+
+Objetivo:
+- Ter roteiro claro antes de teste com cliente.
+
+Entregas:
+- Criar arquivo:
+  C:\Users\krist\AgendamentoWpfApp\TESTE_MANUAL_WPF.md
+- Incluir fluxo:
+  - instalar;
+  - abrir;
+  - login;
+  - criar conta;
+  - criar cliente;
+  - criar profissional/sala;
+  - marcar consulta;
+  - gerar backup;
+  - restaurar backup;
+  - verificar sync;
+  - fechar app e disparar update;
+  - abrir app novamente.
+- Registrar resultado esperado.
+- Registrar erros comuns e como resolver.
+
+Criterio de aceite:
+- Qualquer pessoa consegue validar o app instalado sem depender de Visual Studio ou comandos internos.
+
+
+TASK WPF 9 - MELHORAR SYNC LOCAL ANTES DO DELTA REAL
+
+Objetivo:
+- Preparar caminho para sync delta futura sem depender ainda de mudanca grande na API.
+
+Estado atual:
+- Sync automatica envia snapshot completo.
+
+Entregas WPF:
+- Marcar registros alterados localmente com mais clareza.
+- Separar:
+  - ultima tentativa de sync;
+  - ultima sincronizacao com sucesso.
+- Mostrar quantidade de registros pendentes.
+- Evitar enviar snapshot completo se nada mudou localmente.
+- Melhorar mensagem de status da sync em Configuracoes.
+
+Criterio de aceite:
+- Usuario e suporte entendem se ha pendencia de sync.
+- App reduz chamadas desnecessarias quando nada mudou.
+
+
+TASK WPF 10 - PREPARAR LAUDOS PARA MODELO REAL
+
+Objetivo:
+- Deixar estrutura pronta para receber o modelo final do cliente sem refazer a tela inteira.
+
+Estado atual:
+- Existe PDF exemplo.
+- Nao existe modelo final do cliente.
+
+Entregas:
+- Separar servico de PDF exemplo do servico final.
+- Criar estrutura/interface de template.
+- Preparar pasta padrao de saida.
+- Permitir abrir pasta de laudos.
+- Aguardar modelo final do cliente.
+
+Criterio de aceite:
+- Quando o cliente enviar modelo final, a implementacao entra sem reescrever o modulo inteiro.
+
+
+ORDEM RECOMENDADA PARA O WPF
+
+1. Fechar update automatico ponta a ponta.
+2. Regerar instalador novo com icone e versao.
+3. Testar restore SQLite no app instalado.
+4. Criar log local consolidado.
+5. Criar configuracao da URL da API dentro do app.
+6. Criar tela/status do update.
+7. Ajustar visual com paleta final da empresa.
+8. Criar checklist de teste manual.
+9. Melhorar sync local antes do delta real.
+10. Preparar laudos para modelo real.
+
+Proxima task recomendada pelo tech lead:
+- Fechar update automatico real, porque isso define como as correcoes serao entregues depois que o SparkCore estiver instalado na maquina do cliente.

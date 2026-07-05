@@ -1,0 +1,12 @@
+bin/
+obj/
+*.user
+*.suo
+.vs/
+
+appsettings.Development.json
+appsettings.Production.json
+
+# Dumps locais de banco e logs de execucao
+backups/
+*.log
