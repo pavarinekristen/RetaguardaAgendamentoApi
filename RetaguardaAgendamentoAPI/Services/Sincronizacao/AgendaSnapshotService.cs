@@ -102,9 +102,9 @@ namespace RetaguardaAgendamentoAPI.Services.Sincronizacao
             await connection.OpenAsync();
             _logger.LogInformation("Conexao MySQL administrativa aberta para salvar snapshot. BancoOperacional={BancoOperacional}", operacionalDatabase);
 
-            await GarantirBancoOperacionalAsync(connection, operacionalDatabase);
+            // Banco e tabelas de controle sao criados exclusivamente pelas migrations
+            // (mysql-migrations/001_baseline_schema.sql). Aqui apenas selecionamos o banco.
             await ExecutarAsync(connection, $"USE `{operacionalDatabase}`");
-            await GarantirEstruturaAsync(connection);
             await GarantirTabelasFinaisAsync(connection, tabelas);
 
             await using var transaction = await connection.BeginTransactionAsync();
@@ -198,13 +198,6 @@ namespace RetaguardaAgendamentoAPI.Services.Sincronizacao
             };
         }
 
-        private async Task GarantirBancoOperacionalAsync(MySqlConnection connection, string operacionalDatabase)
-        {
-            await ExecutarAsync(
-                connection,
-                $"CREATE DATABASE IF NOT EXISTS `{operacionalDatabase}` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
-        }
-
         private static async Task<long> RegistrarExecucaoAsync(
             MySqlConnection connection,
             MySqlTransaction transaction,
@@ -259,134 +252,6 @@ namespace RetaguardaAgendamentoAPI.Services.Sincronizacao
             insert.Parameters.AddWithValue("@hash", ValorOuPadrao(registro.Hash, string.Empty));
             insert.Parameters.AddWithValue("@agora", agora);
             await insert.ExecuteNonQueryAsync();
-        }
-
-        private static async Task GarantirEstruturaAsync(MySqlConnection connection)
-        {
-            await ExecutarAsync(connection, @"
-                CREATE TABLE IF NOT EXISTS AGENDA_SYNC_EXECUCAO (
-                    ID BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-                    ID_EMPRESA INT UNSIGNED NOT NULL,
-                    CNPJ VARCHAR(14) NOT NULL,
-                    DISPOSITIVO_ID VARCHAR(64) NOT NULL,
-                    INICIADO_EM DATETIME NOT NULL,
-                    FINALIZADO_EM DATETIME NULL,
-                    TOTAL_TABELAS INT NOT NULL DEFAULT 0,
-                    TOTAL_REGISTROS INT NOT NULL DEFAULT 0,
-                    PRIMARY KEY (ID),
-                    INDEX IX_AGENDA_SYNC_EXECUCAO_EMPRESA (ID_EMPRESA)
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
-
-            await GarantirColunaAsync(connection, "AGENDA_SYNC_EXECUCAO", "ID_EMPRESA", "INT UNSIGNED NOT NULL DEFAULT 0 AFTER ID");
-            await GarantirIndiceAsync(connection, "AGENDA_SYNC_EXECUCAO", "IX_AGENDA_SYNC_EXECUCAO_EMPRESA", "CREATE INDEX IX_AGENDA_SYNC_EXECUCAO_EMPRESA ON AGENDA_SYNC_EXECUCAO (ID_EMPRESA)");
-
-            await ExecutarAsync(connection, @"
-                CREATE TABLE IF NOT EXISTS AGENDA_SYNC_REGISTRO (
-                    ID BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-                    ID_EXECUCAO BIGINT UNSIGNED NOT NULL,
-                    ID_EMPRESA INT UNSIGNED NOT NULL,
-                    TABELA VARCHAR(128) NOT NULL,
-                    ID_LOCAL VARCHAR(128) NOT NULL,
-                    DISPOSITIVO_ID VARCHAR(64) NOT NULL,
-                    DADOS_JSON LONGTEXT NOT NULL,
-                    HASH_SHA256 VARCHAR(64) NOT NULL,
-                    SINCRONIZADO_EM DATETIME NOT NULL,
-                    PRIMARY KEY (ID),
-                    UNIQUE KEY UK_AGENDA_SYNC_REGISTRO_TENANT_TABELA_ID_DEVICE (ID_EMPRESA, TABELA, ID_LOCAL, DISPOSITIVO_ID),
-                    INDEX IX_AGENDA_SYNC_REGISTRO_EXECUCAO (ID_EXECUCAO),
-                    INDEX IX_AGENDA_SYNC_REGISTRO_EMPRESA (ID_EMPRESA)
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
-
-            await GarantirColunaAsync(connection, "AGENDA_SYNC_REGISTRO", "ID_EMPRESA", "INT UNSIGNED NOT NULL DEFAULT 0 AFTER ID_EXECUCAO");
-            await GarantirColunaAsync(connection, "AGENDA_SYNC_REGISTRO", "DISPOSITIVO_ID", "VARCHAR(64) NOT NULL DEFAULT 'AGENDA-WPF' AFTER ID_LOCAL");
-            await RemoverIndiceAsync(connection, "AGENDA_SYNC_REGISTRO", "UK_AGENDA_SYNC_REGISTRO_TENANT_TABELA_ID");
-            await GarantirIndiceAsync(connection, "AGENDA_SYNC_REGISTRO", "UK_AGENDA_SYNC_REGISTRO_TENANT_TABELA_ID_DEVICE", "CREATE UNIQUE INDEX UK_AGENDA_SYNC_REGISTRO_TENANT_TABELA_ID_DEVICE ON AGENDA_SYNC_REGISTRO (ID_EMPRESA, TABELA, ID_LOCAL, DISPOSITIVO_ID)");
-            await GarantirIndiceAsync(connection, "AGENDA_SYNC_REGISTRO", "IX_AGENDA_SYNC_REGISTRO_EMPRESA", "CREATE INDEX IX_AGENDA_SYNC_REGISTRO_EMPRESA ON AGENDA_SYNC_REGISTRO (ID_EMPRESA)");
-
-            await ExecutarAsync(connection, @"
-                CREATE TABLE IF NOT EXISTS AGENDA_SYNC_CONFLITO (
-                    ID BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-                    ID_EMPRESA INT UNSIGNED NOT NULL,
-                    TABELA VARCHAR(128) NOT NULL,
-                    ID_LOCAL VARCHAR(128) NOT NULL,
-                    DISPOSITIVO_ID VARCHAR(64) NOT NULL,
-                    DADOS_LOCAL LONGTEXT NULL,
-                    DADOS_REMOTO LONGTEXT NULL,
-                    MOTIVO VARCHAR(500) NULL,
-                    STATUS VARCHAR(30) NOT NULL DEFAULT 'PENDENTE',
-                    CRIADO_EM DATETIME NOT NULL,
-                    RESOLVIDO_EM DATETIME NULL,
-                    PRIMARY KEY (ID),
-                    INDEX IX_AGENDA_SYNC_CONFLITO_EMPRESA (ID_EMPRESA)
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
-
-            await ExecutarAsync(connection, @"
-                CREATE TABLE IF NOT EXISTS AGENDA_DISPOSITIVO (
-                    ID BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-                    ID_EMPRESA INT UNSIGNED NOT NULL,
-                    DISPOSITIVO_ID VARCHAR(64) NOT NULL,
-                    NOME VARCHAR(120) NULL,
-                    ULTIMA_SINCRONIZACAO_EM DATETIME NULL,
-                    ATIVO CHAR(1) NOT NULL DEFAULT 'S',
-                    PRIMARY KEY (ID),
-                    UNIQUE KEY UK_AGENDA_DISPOSITIVO_EMPRESA_DISPOSITIVO (ID_EMPRESA, DISPOSITIVO_ID)
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
-
-            await ExecutarAsync(connection, @"
-                CREATE TABLE IF NOT EXISTS AGENDA_AUDITORIA_OPERACIONAL (
-                    ID BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-                    ID_EMPRESA INT UNSIGNED NOT NULL,
-                    TABELA VARCHAR(128) NOT NULL,
-                    ID_LOCAL VARCHAR(128) NOT NULL,
-                    DISPOSITIVO_ID VARCHAR(64) NOT NULL,
-                    ACAO VARCHAR(30) NOT NULL,
-                    DADOS_JSON LONGTEXT NULL,
-                    CRIADO_EM DATETIME NOT NULL,
-                    PRIMARY KEY (ID),
-                    INDEX IX_AGENDA_AUDITORIA_EMPRESA_TABELA (ID_EMPRESA, TABELA)
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
-
-            await ExecutarAsync(connection, @"
-                CREATE TABLE IF NOT EXISTS INTEGRACAO_OUTBOX (
-                    ID BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-                    ID_EMPRESA INT UNSIGNED NOT NULL,
-                    ORIGEM VARCHAR(60) NOT NULL,
-                    ENTIDADE VARCHAR(128) NOT NULL,
-                    ID_LOCAL VARCHAR(128) NOT NULL,
-                    PAYLOAD_JSON LONGTEXT NOT NULL,
-                    STATUS VARCHAR(30) NOT NULL DEFAULT 'PROCESSADO',
-                    CRIADO_EM DATETIME NOT NULL,
-                    PROCESSADO_EM DATETIME NULL,
-                    PRIMARY KEY (ID),
-                    INDEX IX_INTEGRACAO_OUTBOX_EMPRESA_STATUS (ID_EMPRESA, STATUS)
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
-
-            await ExecutarAsync(connection, @"
-                CREATE TABLE IF NOT EXISTS INTEGRACAO_CONFLITO (
-                    ID BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-                    ID_EMPRESA INT UNSIGNED NOT NULL,
-                    ENTIDADE VARCHAR(128) NOT NULL,
-                    ID_LOCAL VARCHAR(128) NOT NULL,
-                    MOTIVO VARCHAR(500) NULL,
-                    PAYLOAD_JSON LONGTEXT NULL,
-                    STATUS VARCHAR(30) NOT NULL DEFAULT 'PENDENTE',
-                    CRIADO_EM DATETIME NOT NULL,
-                    PRIMARY KEY (ID),
-                    INDEX IX_INTEGRACAO_CONFLITO_EMPRESA (ID_EMPRESA)
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
-
-            await ExecutarAsync(connection, @"
-                CREATE TABLE IF NOT EXISTS INTEGRACAO_LOG (
-                    ID BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-                    ID_EMPRESA INT UNSIGNED NOT NULL,
-                    ENTIDADE VARCHAR(128) NOT NULL,
-                    ID_LOCAL VARCHAR(128) NULL,
-                    EVENTO VARCHAR(60) NOT NULL,
-                    MENSAGEM VARCHAR(1000) NULL,
-                    CRIADO_EM DATETIME NOT NULL,
-                    PRIMARY KEY (ID),
-                    INDEX IX_INTEGRACAO_LOG_EMPRESA (ID_EMPRESA)
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
         }
 
         private static async Task GarantirTabelasFinaisAsync(MySqlConnection connection, IEnumerable<AgendaSnapshotTable> tabelas)
@@ -727,21 +592,6 @@ namespace RetaguardaAgendamentoAPI.Services.Sincronizacao
 
             if (Convert.ToInt32(await command.ExecuteScalarAsync()) == 0)
                 await ExecutarAsync(connection, createSql);
-        }
-
-        private static async Task RemoverIndiceAsync(MySqlConnection connection, string tabela, string indice)
-        {
-            await using var command = new MySqlCommand(@"
-                SELECT COUNT(*)
-                  FROM INFORMATION_SCHEMA.STATISTICS
-                 WHERE TABLE_SCHEMA = DATABASE()
-                   AND TABLE_NAME = @tabela
-                   AND INDEX_NAME = @indice", connection);
-            command.Parameters.AddWithValue("@tabela", tabela);
-            command.Parameters.AddWithValue("@indice", indice);
-
-            if (Convert.ToInt32(await command.ExecuteScalarAsync()) > 0)
-                await ExecutarAsync(connection, $"DROP INDEX `{indice}` ON `{tabela}`");
         }
 
         private static IReadOnlyList<string> ExtrairColunas(AgendaSnapshotTable tabela)

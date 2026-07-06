@@ -284,10 +284,15 @@ Pontos fortes:
 - ASP.NET Core .NET 8.
 - MySQL funcionando via Docker.
 - Autenticacao por token proprio armazenado em banco.
-- Senha com salt/hash.
+- Senha com PBKDF2-SHA256 (210 mil iteracoes, formato versionado PBKDF2$iter$salt$hash).
+- Hashes legados SHA256 sao migrados automaticamente para PBKDF2 no proximo login (re-hash transparente).
+- Recuperacao de senha em duas etapas: codigo por e-mail (RET_EMAIL_TOKEN tipo RESET_SENHA) + POST /auth/redefinir-senha.
+- Redefinir senha revoga todas as sessoes ativas do usuario.
 - Confirmacao de e-mail implementada.
 - Endpoint de snapshot protegido por token.
 - Banco operacional recebe snapshots por empresa/dispositivo.
+- Schema das tabelas de controle vem exclusivamente das migrations; API nao executa mais DDL no fluxo de requisicao de auth.
+- Verificacao de schema no startup (SchemaStartupCheck): se o MySQL estiver acessivel e faltarem tabelas, a API recusa subir com mensagem apontando apply-mysql-migrations.ps1; se o MySQL estiver fora, sobe normalmente e /health reporta DEGRADED.
 - API publica localmente em http://localhost:5000.
 - Publish Release gerado com sucesso.
 
@@ -302,16 +307,41 @@ Arquivos relevantes:
 - C:\Users\krist\RetaguardaAgendamentoAPI\docker-compose.mysql.yml
 
 Pontos ainda fracos:
-- appsettings.Development.json contem segredo de e-mail.
-- CORS esta aberto com AllowAnyOrigin.
 - Connection string ainda aponta para localhost:3308.
-- API usa SQL direto e ajuste dinamico de schema em alguns pontos.
-- Falta estrategia formal de migrations/versionamento do MySQL.
-- Falta readiness endpoint simples para monitoramento.
+- Snapshot ainda cria tabelas/colunas dinamicas a partir do payload do cliente (whitelist pendente - TASK API-SEC 4).
 - Falta politica de logs estruturados para producao.
-- Falta rate limit nos endpoints publicos de auth.
-- Falta plano de HTTPS/reverse proxy.
+- Falta plano de HTTPS/reverse proxy (incluindo UseForwardedHeaders para o rate limit funcionar atras de proxy).
 - Falta configuracao real de dominio/subdominio.
+- Falta logout/limpeza de sessoes antigas (TASK API-SEC 6).
+
+ONDA 1 DE SEGURANCA APLICADA EM 06/07/2026:
+
+TASK API-SEC 1 - Hash de senha PBKDF2. FEITO
+- Novo Util/PasswordHasher.cs: PBKDF2-SHA256, 210000 iteracoes, salt 16 bytes, comparacao em tempo constante.
+- Formato versionado no SENHA_HASH: PBKDF2$210000$salt$hash (cabe no VARCHAR(128)).
+- Login verifica formato legado SHA256(salt:senha) e regrava em PBKDF2 no login bem-sucedido.
+- Contas novas ja nascem em PBKDF2 (validado no MySQL local).
+
+TASK API-SEC 2 - Reset de senha por token. FEITO
+- POST /auth/recuperar-senha agora APENAS gera codigo de 6 digitos (RET_EMAIL_TOKEN tipo RESET_SENHA, expira 30 min, uso unico) e envia por e-mail; nao troca mais a senha.
+- Novo POST /auth/redefinir-senha (email + codigo + novaSenha >= 8): troca a senha e revoga todas as sessoes do usuario.
+- Removidos senha temporaria, flag RETORNA_SENHA_TEMPORARIA e campo SenhaTemporaria do contrato.
+- Contrato de RecuperarSenhaResponse mudou: Sucesso, Mensagem, CodigoResetTeste (codigo so retorna quando Email:ReturnConfirmationCodeInResponse=true).
+- WPF atualizado: AuthApiService com RedefinirSenhaAsync e nova janela ResetPasswordWindow (codigo + nova senha) chamada pelo Esqueceu? do login.
+
+TASK API-SEC 3 - DDL fora do hot path. FEITO
+- Removidos GarantirTabelasAsync/GarantirColunas* do AuthService e criacao de banco/tabelas de controle do AgendaSnapshotService.
+- Schema oficial: mysql-migrations (001 baseline). Testes de integracao criam o schema na fixture.
+- Novo Services/SchemaStartupCheck.cs valida schema no startup usando DefaultConnection (retaguarda) e AdminConnection (operacional; INFORMATION_SCHEMA so mostra tabelas com privilegio).
+- ATENCAO drift corrigido em 06/07/2026: o MySQL local tinha a migration 001 registrada como aplicada, mas as tabelas do agenda_operacional nao existiam (o DDL de runtime mascarava). Baseline reexecutado manualmente (idempotente). Em caso de erro de schema no startup, reexecutar o conteudo de 001 no MySQL resolve.
+
+Validacao da Onda 1 em 06/07/2026:
+- dotnet build RetaguardaAgendamentoAPI.sln: OK, 0 avisos.
+- dotnet test (119 testes, incluindo integracao com Testcontainers MySQL): 119 aprovados.
+- dotnet build AgendamentoWpfApp.sln: OK, 0 avisos.
+- Testes unitarios WPF e smoke SQLite: OK.
+- E2E HTTP em localhost:5099: criar-conta -> confirmar-email -> login -> recuperar-senha (senha antiga continua valida) -> redefinir-senha -> senha antiga 401, senha nova OK, sessao antiga revogada 401, /auth/me com token novo OK.
+- Hash gravado no banco confirmado como PBKDF2$210000$...
 
 
 9. SITUACAO DO DOMINIO E DEPLOY WEB

@@ -12,6 +12,9 @@ namespace RetaguardaAgendamentoAPI.Services.Auth
 {
     public class AuthService
     {
+        private const string TipoTokenConfirmacaoEmail = "CONFIRMACAO_EMAIL";
+        private const string TipoTokenResetSenha = "RESET_SENHA";
+
         private readonly string _connectionString;
         private readonly EmailService _emailService;
 
@@ -33,7 +36,6 @@ namespace RetaguardaAgendamentoAPI.Services.Auth
 
             await using var connection = new MySqlConnection(_connectionString);
             await connection.OpenAsync();
-            await GarantirTabelasAsync(connection);
 
             if (await ObterUsuarioIdPorEmailAsync(connection, email) != null)
                 throw new InvalidOperationException("E-mail ja cadastrado no sistema. Use outro e-mail ou recupere a senha.");
@@ -55,9 +57,8 @@ namespace RetaguardaAgendamentoAPI.Services.Auth
                 return await MontarRespostaAsync(connection, empresaId.Value, usuarioExistente.Value, string.Empty, null);
             }
 
-            var salt = CriarTokenSeguro(24);
-            var senhaHash = HashSenha(senha, salt);
-            var usuarioId = await InserirUsuarioAsync(connection, empresaId.Value, request.UsuarioNome, login, senhaHash, salt, perfil, email);
+            var senhaHash = PasswordHasher.Hash(senha);
+            var usuarioId = await InserirUsuarioAsync(connection, empresaId.Value, request.UsuarioNome, login, senhaHash, string.Empty, perfil, email);
 
             var resposta = await MontarRespostaAsync(connection, empresaId.Value, usuarioId, string.Empty, null);
             return await GerarEnviarConfirmacaoAsync(connection, usuarioId, email, request.UsuarioNome, resposta);
@@ -79,7 +80,6 @@ namespace RetaguardaAgendamentoAPI.Services.Auth
 
             await using var connection = new MySqlConnection(_connectionString);
             await connection.OpenAsync();
-            await GarantirTabelasAsync(connection);
 
             var tokenHash = HashToken(codigo);
             const string sql = @"
@@ -148,7 +148,6 @@ namespace RetaguardaAgendamentoAPI.Services.Auth
 
             await using var connection = new MySqlConnection(_connectionString);
             await connection.OpenAsync();
-            await GarantirTabelasAsync(connection);
 
             const string sql = @"
                 SELECT u.ID AS UsuarioId, u.NOME, COALESCE(u.CONFIRMADO, 'S') AS CONFIRMADO, COALESCE(e.REGISTRADO, 'S') AS REGISTRADO
@@ -202,7 +201,6 @@ namespace RetaguardaAgendamentoAPI.Services.Auth
 
             await using var connection = new MySqlConnection(_connectionString);
             await connection.OpenAsync();
-            await GarantirTabelasAsync(connection);
 
             const string sql = @"
                 SELECT u.ID, u.ID_EMPRESA, u.SENHA_HASH, u.SENHA_SALT, COALESCE(u.CONFIRMADO, 'S') AS CONFIRMADO, COALESCE(e.REGISTRADO, 'S') AS REGISTRADO
@@ -227,8 +225,12 @@ namespace RetaguardaAgendamentoAPI.Services.Auth
             var empresaRegistrada = reader["REGISTRADO"].ToString();
             await reader.CloseAsync();
 
-            if (!string.Equals(HashSenha(senha, salt), senhaHash, StringComparison.Ordinal))
+            if (!PasswordHasher.Verificar(senha, senhaHash, salt))
                 throw new UnauthorizedAccessException("Usuario ou senha invalidos.");
+
+            // Re-hash transparente: hashes legados SHA-256 sao regravados em PBKDF2 no login bem-sucedido.
+            if (PasswordHasher.PrecisaRehash(senhaHash))
+                await AtualizarSenhaAsync(connection, usuarioId, PasswordHasher.Hash(senha));
 
             if (!string.Equals(empresaRegistrada, "S", StringComparison.OrdinalIgnoreCase) ||
                 !string.Equals(usuarioConfirmado, "S", StringComparison.OrdinalIgnoreCase))
@@ -250,12 +252,18 @@ namespace RetaguardaAgendamentoAPI.Services.Auth
             if (string.IsNullOrWhiteSpace(email) || email.IndexOf('@') <= 0)
                 throw new ArgumentException("E-mail valido e obrigatorio.");
 
+            // Resposta generica sempre igual, exista o usuario ou nao (anti-enumeracao).
+            var respostaGenerica = new RecuperarSenhaResponse
+            {
+                Sucesso = true,
+                Mensagem = "Se o e-mail estiver cadastrado, um codigo de redefinicao sera enviado."
+            };
+
             await using var connection = new MySqlConnection(_connectionString);
             await connection.OpenAsync();
-            await GarantirTabelasAsync(connection);
 
             const string sql = @"
-                SELECT u.ID, u.EMAIL
+                SELECT u.ID, u.NOME
                   FROM RET_USUARIO u
                   JOIN EMPRESA e ON e.ID = u.ID_EMPRESA
                  WHERE LOWER(u.EMAIL) = @email
@@ -267,43 +275,109 @@ namespace RetaguardaAgendamentoAPI.Services.Auth
             await using var localizar = new MySqlCommand(sql, connection);
             localizar.Parameters.AddWithValue("@email", email);
 
-            await using var reader = await localizar.ExecuteReaderAsync();
-            if (!await reader.ReadAsync())
+            int usuarioId;
+            string nome;
+            await using (var reader = await localizar.ExecuteReaderAsync())
             {
-                return new RecuperarSenhaResponse
-                {
-                    Sucesso = true,
-                    SenhaAlterada = false,
-                    Mensagem = "Se o usuario estiver cadastrado, as instrucoes de recuperacao serao disponibilizadas."
-                };
+                if (!await reader.ReadAsync())
+                    return respostaGenerica;
+
+                usuarioId = Convert.ToInt32(reader["ID"]);
+                nome = reader["NOME"] == DBNull.Value ? string.Empty : reader["NOME"].ToString();
             }
 
-            var usuarioId = Convert.ToInt32(reader["ID"]);
-            await reader.CloseAsync();
+            var codigo = CriarCodigoConfirmacao();
+            var expiraEm = DateTime.UtcNow.AddMinutes(30);
+            await RegistrarTokenAsync(connection, usuarioId, TipoTokenResetSenha, codigo, expiraEm);
 
-            var senhaTemporaria = CriarSenhaTemporaria();
-            var salt = CriarTokenSeguro(24);
-            var senhaHash = HashSenha(senhaTemporaria, salt);
+            if (_emailService?.ReturnConfirmationCodeInResponse == true)
+                respostaGenerica.CodigoResetTeste = codigo;
 
-            await using var atualizar = new MySqlCommand(@"
-                UPDATE RET_USUARIO
-                   SET SENHA_HASH = @senhaHash,
-                       SENHA_SALT = @salt
-                 WHERE ID = @usuarioId", connection);
-            atualizar.Parameters.AddWithValue("@senhaHash", senhaHash);
-            atualizar.Parameters.AddWithValue("@salt", salt);
-            atualizar.Parameters.AddWithValue("@usuarioId", usuarioId);
-            await atualizar.ExecuteNonQueryAsync();
+            if (_emailService?.Enabled == true)
+                await _emailService.EnviarCodigoRedefinicaoSenhaAsync(email, nome, codigo);
 
-            var retornarSenha = DeveRetornarSenhaTemporaria();
-            return new RecuperarSenhaResponse
+            return respostaGenerica;
+        }
+
+        public async Task<RedefinirSenhaResponse> RedefinirSenhaAsync(RedefinirSenhaRequest request)
+        {
+            if (request == null)
+                throw new ArgumentException("Informe os dados para redefinicao de senha.");
+
+            var email = NormalizarLogin(request.Email);
+            var codigo = (request.Codigo ?? string.Empty).Trim();
+
+            if (string.IsNullOrWhiteSpace(email) || email.IndexOf('@') <= 0)
+                throw new ArgumentException("E-mail valido e obrigatorio.");
+
+            if (string.IsNullOrWhiteSpace(codigo))
+                throw new ArgumentException("Codigo de redefinicao obrigatorio.");
+
+            if (string.IsNullOrWhiteSpace(request.NovaSenha) || request.NovaSenha.Trim().Length < 8)
+                throw new ArgumentException("Nova senha deve possuir pelo menos 8 caracteres.");
+
+            await using var connection = new MySqlConnection(_connectionString);
+            await connection.OpenAsync();
+
+            var tokenHash = HashToken(codigo);
+            const string sql = @"
+                SELECT t.ID AS TokenId, u.ID AS UsuarioId
+                  FROM RET_EMAIL_TOKEN t
+                  JOIN RET_USUARIO u ON u.ID = t.ID_USUARIO
+                 WHERE LOWER(u.EMAIL) = @email
+                   AND t.TIPO = @tipo
+                   AND t.TOKEN_HASH = @tokenHash
+                   AND t.USADO_EM IS NULL
+                   AND t.EXPIRA_EM > UTC_TIMESTAMP()
+                   AND u.ATIVO = 'S'
+                 LIMIT 1";
+
+            await using var localizar = new MySqlCommand(sql, connection);
+            localizar.Parameters.AddWithValue("@email", email);
+            localizar.Parameters.AddWithValue("@tipo", TipoTokenResetSenha);
+            localizar.Parameters.AddWithValue("@tokenHash", tokenHash);
+
+            long tokenId;
+            int usuarioId;
+            await using (var reader = await localizar.ExecuteReaderAsync())
+            {
+                if (!await reader.ReadAsync())
+                    throw new UnauthorizedAccessException("Codigo de redefinicao invalido ou expirado.");
+
+                tokenId = Convert.ToInt64(reader["TokenId"]);
+                usuarioId = Convert.ToInt32(reader["UsuarioId"]);
+            }
+
+            var senhaHash = PasswordHasher.Hash(request.NovaSenha.Trim());
+
+            await using var transaction = await connection.BeginTransactionAsync();
+            try
+            {
+                await ExecutarAsync(connection, (MySqlTransaction)transaction,
+                    "UPDATE RET_EMAIL_TOKEN SET USADO_EM = UTC_TIMESTAMP() WHERE ID = @id",
+                    ("@id", tokenId));
+
+                await ExecutarAsync(connection, (MySqlTransaction)transaction,
+                    "UPDATE RET_USUARIO SET SENHA_HASH = @senhaHash, SENHA_SALT = '' WHERE ID = @id",
+                    ("@senhaHash", senhaHash), ("@id", usuarioId));
+
+                // Redefinir a senha derruba todas as sessoes ativas do usuario.
+                await ExecutarAsync(connection, (MySqlTransaction)transaction,
+                    "UPDATE RET_SESSAO SET REVOGADO = 'S' WHERE ID_USUARIO = @id AND REVOGADO = 'N'",
+                    ("@id", usuarioId));
+
+                await transaction.CommitAsync();
+            }
+            catch
+            {
+                await transaction.RollbackAsync();
+                throw;
+            }
+
+            return new RedefinirSenhaResponse
             {
                 Sucesso = true,
-                SenhaAlterada = true,
-                Mensagem = retornarSenha
-                    ? "Senha temporaria gerada para teste local. Use-a no proximo login e altere depois."
-                    : "Senha temporaria gerada. Consulte o canal configurado pela retaguarda.",
-                SenhaTemporaria = retornarSenha ? senhaTemporaria : null
+                Mensagem = "Senha redefinida com sucesso. Faca login com a nova senha."
             };
         }
 
@@ -314,7 +388,6 @@ namespace RetaguardaAgendamentoAPI.Services.Auth
 
             await using var connection = new MySqlConnection(_connectionString);
             await connection.OpenAsync();
-            await GarantirTabelasAsync(connection);
 
             var tokenHash = HashToken(token);
             const string sql = @"
@@ -356,165 +429,6 @@ namespace RetaguardaAgendamentoAPI.Services.Auth
 
             if (string.IsNullOrWhiteSpace(request.Senha) || request.Senha.Trim().Length < 8)
                 throw new ArgumentException("Senha deve possuir pelo menos 8 caracteres.");
-        }
-
-        private static async Task GarantirTabelasAsync(MySqlConnection connection)
-        {
-            var sql = @"
-                CREATE TABLE IF NOT EXISTS EMPRESA (
-                    ID INT UNSIGNED NOT NULL AUTO_INCREMENT,
-                    RAZAO_SOCIAL VARCHAR(150) NULL,
-                    NOME_FANTASIA VARCHAR(150) NULL,
-                    CNPJ VARCHAR(14) NULL,
-                    INSCRICAO_ESTADUAL VARCHAR(30) NULL,
-                    INSCRICAO_MUNICIPAL VARCHAR(30) NULL,
-                    TIPO_REGIME CHAR(1) NULL,
-                    CRT CHAR(1) NULL,
-                    DATA_CONSTITUICAO DATE NULL,
-                    TIPO CHAR(1) NULL,
-                    EMAIL VARCHAR(250) NULL,
-                    LOGRADOURO VARCHAR(250) NULL,
-                    NUMERO VARCHAR(10) NULL,
-                    COMPLEMENTO VARCHAR(100) NULL,
-                    CEP VARCHAR(8) NULL,
-                    BAIRRO VARCHAR(100) NULL,
-                    CIDADE VARCHAR(100) NULL,
-                    UF CHAR(2) NULL,
-                    FONE VARCHAR(15) NULL,
-                    CONTATO VARCHAR(30) NULL,
-                    CODIGO_IBGE_CIDADE INT UNSIGNED NULL,
-                    CODIGO_IBGE_UF INT UNSIGNED NULL,
-                    LOGOTIPO TEXT NULL,
-                    REGISTRADO CHAR(1) NULL,
-                    NATUREZA_JURIDICA VARCHAR(200) NULL,
-                    SIMEI CHAR(1) NULL,
-                    EMAIL_PAGAMENTO VARCHAR(250) NULL,
-                    DATA_REGISTRO DATE NULL,
-                    HORA_REGISTRO VARCHAR(8) NULL,
-                    PRIMARY KEY (ID),
-                    UNIQUE KEY UK_EMPRESA_CNPJ (CNPJ)
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
-                CREATE TABLE IF NOT EXISTS RET_USUARIO (
-                    ID INT UNSIGNED NOT NULL AUTO_INCREMENT,
-                    ID_EMPRESA INT UNSIGNED NOT NULL,
-                    NOME VARCHAR(150) NULL,
-                    LOGIN VARCHAR(80) NOT NULL,
-                    EMAIL VARCHAR(180) NULL,
-                    SENHA_HASH VARCHAR(128) NOT NULL,
-                    SENHA_SALT VARCHAR(64) NOT NULL,
-                    PERFIL VARCHAR(30) NOT NULL,
-                    CONFIRMADO CHAR(1) NOT NULL DEFAULT 'S',
-                    CONFIRMADO_EM DATETIME NULL,
-                    ATIVO CHAR(1) NOT NULL DEFAULT 'S',
-                    CRIADO_EM DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    ULTIMO_LOGIN DATETIME NULL,
-                    PRIMARY KEY (ID),
-                    UNIQUE KEY UK_RET_USUARIO_EMPRESA_LOGIN (ID_EMPRESA, LOGIN),
-                    CONSTRAINT FK_RET_USUARIO_EMPRESA FOREIGN KEY (ID_EMPRESA) REFERENCES EMPRESA(ID)
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
-                CREATE TABLE IF NOT EXISTS RET_SESSAO (
-                    ID INT UNSIGNED NOT NULL AUTO_INCREMENT,
-                    ID_USUARIO INT UNSIGNED NOT NULL,
-                    TOKEN_HASH VARCHAR(128) NOT NULL,
-                    CRIADO_EM DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    EXPIRA_EM DATETIME NOT NULL,
-                    REVOGADO CHAR(1) NOT NULL DEFAULT 'N',
-                    PRIMARY KEY (ID),
-                    UNIQUE KEY UK_RET_SESSAO_TOKEN (TOKEN_HASH),
-                    CONSTRAINT FK_RET_SESSAO_USUARIO FOREIGN KEY (ID_USUARIO) REFERENCES RET_USUARIO(ID)
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
-                CREATE TABLE IF NOT EXISTS RET_EMAIL_TOKEN (
-                    ID BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-                    ID_USUARIO INT UNSIGNED NOT NULL,
-                    TIPO VARCHAR(40) NOT NULL,
-                    TOKEN_HASH VARCHAR(128) NOT NULL,
-                    CRIADO_EM DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    EXPIRA_EM DATETIME NOT NULL,
-                    USADO_EM DATETIME NULL,
-                    PRIMARY KEY (ID),
-                    INDEX IX_RET_EMAIL_TOKEN_USUARIO_TIPO (ID_USUARIO, TIPO),
-                    INDEX IX_RET_EMAIL_TOKEN_HASH (TOKEN_HASH),
-                    CONSTRAINT FK_RET_EMAIL_TOKEN_USUARIO FOREIGN KEY (ID_USUARIO) REFERENCES RET_USUARIO(ID)
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;";
-
-            await using var command = new MySqlCommand(sql, connection);
-            await command.ExecuteNonQueryAsync();
-            await GarantirColunasUsuarioAsync(connection);
-            await GarantirColunasSessaoAsync(connection);
-        }
-
-        private static async Task GarantirColunasUsuarioAsync(MySqlConnection connection)
-        {
-            if (!await ColunaExisteAsync(connection, "RET_USUARIO", "EMAIL"))
-                await ExecutarAsync(connection, "ALTER TABLE RET_USUARIO ADD COLUMN EMAIL VARCHAR(180) NULL AFTER LOGIN");
-
-            if (!await ColunaExisteAsync(connection, "RET_USUARIO", "CONFIRMADO"))
-                await ExecutarAsync(connection, "ALTER TABLE RET_USUARIO ADD COLUMN CONFIRMADO CHAR(1) NOT NULL DEFAULT 'S' AFTER PERFIL");
-
-            if (!await ColunaExisteAsync(connection, "RET_USUARIO", "CONFIRMADO_EM"))
-                await ExecutarAsync(connection, "ALTER TABLE RET_USUARIO ADD COLUMN CONFIRMADO_EM DATETIME NULL AFTER CONFIRMADO");
-
-            if (!await IndiceExisteAsync(connection, "RET_USUARIO", "UK_RET_USUARIO_EMAIL"))
-            {
-                try
-                {
-                    await ExecutarAsync(connection, "ALTER TABLE RET_USUARIO ADD UNIQUE INDEX UK_RET_USUARIO_EMAIL (EMAIL)");
-                }
-                catch (MySqlException ex) when (ex.Number == 1062 || ex.Number == 1061)
-                {
-                    // Existem emails duplicados â€” Ã­ndice nÃ£o criado atÃ© os dados serem corrigidos
-                }
-            }
-        }
-
-        private static async Task<bool> IndiceExisteAsync(MySqlConnection connection, string tabela, string indice)
-        {
-            await using var command = new MySqlCommand(@"
-                SELECT COUNT(*)
-                  FROM INFORMATION_SCHEMA.STATISTICS
-                 WHERE TABLE_SCHEMA = DATABASE()
-                   AND TABLE_NAME = @tabela
-                   AND INDEX_NAME = @indice", connection);
-            command.Parameters.AddWithValue("@tabela", tabela);
-            command.Parameters.AddWithValue("@indice", indice);
-            return Convert.ToInt32(await command.ExecuteScalarAsync()) > 0;
-        }
-
-        private static async Task GarantirColunasSessaoAsync(MySqlConnection connection)
-        {
-            if (!await ColunaExisteAsync(connection, "RET_SESSAO", "EXPIRA_EM"))
-                await ExecutarAsync(connection, "ALTER TABLE RET_SESSAO ADD COLUMN EXPIRA_EM DATETIME NOT NULL DEFAULT (UTC_TIMESTAMP())");
-
-            if (!await ColunaExisteAsync(connection, "RET_SESSAO", "REVOGADO"))
-                await ExecutarAsync(connection, "ALTER TABLE RET_SESSAO ADD COLUMN REVOGADO CHAR(1) NOT NULL DEFAULT 'N'");
-
-            if (await ColunaExisteAsync(connection, "RET_SESSAO", "DATA_EXPIRACAO"))
-                await ExecutarAsync(connection, "UPDATE RET_SESSAO SET EXPIRA_EM = DATA_EXPIRACAO WHERE DATA_EXPIRACAO IS NOT NULL");
-
-            if (await ColunaExisteAsync(connection, "RET_SESSAO", "ATIVO"))
-                await ExecutarAsync(connection, "UPDATE RET_SESSAO SET REVOGADO = CASE WHEN ATIVO = 'S' THEN 'N' ELSE 'S' END");
-        }
-
-        private static async Task<bool> ColunaExisteAsync(MySqlConnection connection, string tabela, string coluna)
-        {
-            await using var command = new MySqlCommand(@"
-                SELECT COUNT(*)
-                  FROM INFORMATION_SCHEMA.COLUMNS
-                 WHERE TABLE_SCHEMA = DATABASE()
-                   AND TABLE_NAME = @tabela
-                   AND COLUMN_NAME = @coluna", connection);
-            command.Parameters.AddWithValue("@tabela", tabela);
-            command.Parameters.AddWithValue("@coluna", coluna);
-            return Convert.ToInt32(await command.ExecuteScalarAsync()) > 0;
-        }
-
-        private static async Task ExecutarAsync(MySqlConnection connection, string sql)
-        {
-            await using var command = new MySqlCommand(sql, connection);
-            await command.ExecuteNonQueryAsync();
         }
 
         private static async Task ExecutarAsync(MySqlConnection connection, MySqlTransaction transaction, string sql, params (string Nome, object Valor)[] parametros)
@@ -611,6 +525,15 @@ namespace RetaguardaAgendamentoAPI.Services.Auth
             return Convert.ToInt32(await command.ExecuteScalarAsync());
         }
 
+        private static async Task AtualizarSenhaAsync(MySqlConnection connection, int usuarioId, string senhaHash)
+        {
+            await using var command = new MySqlCommand(
+                "UPDATE RET_USUARIO SET SENHA_HASH = @senhaHash, SENHA_SALT = '' WHERE ID = @id", connection);
+            command.Parameters.AddWithValue("@senhaHash", senhaHash);
+            command.Parameters.AddWithValue("@id", usuarioId);
+            await command.ExecuteNonQueryAsync();
+        }
+
         private static async Task AtualizarUltimoLoginAsync(MySqlConnection connection, int usuarioId)
         {
             await using var command = new MySqlCommand("UPDATE RET_USUARIO SET ULTIMO_LOGIN = UTC_TIMESTAMP() WHERE ID = @id", connection);
@@ -701,7 +624,7 @@ namespace RetaguardaAgendamentoAPI.Services.Auth
             var codigo = CriarCodigoConfirmacao();
             var expiraEm = DateTime.UtcNow.AddMinutes(30);
 
-            await RegistrarTokenConfirmacaoAsync(connection, usuarioId, codigo, expiraEm);
+            await RegistrarTokenAsync(connection, usuarioId, TipoTokenConfirmacaoEmail, codigo, expiraEm);
 
             var response = new ConfirmacaoEmailResponse
             {
@@ -721,23 +644,25 @@ namespace RetaguardaAgendamentoAPI.Services.Auth
             return response;
         }
 
-        private static async Task RegistrarTokenConfirmacaoAsync(MySqlConnection connection, int usuarioId, string codigo, DateTime expiraEm)
+        private static async Task RegistrarTokenAsync(MySqlConnection connection, int usuarioId, string tipo, string codigo, DateTime expiraEm)
         {
             await using var revogarAntigos = new MySqlCommand(@"
                 UPDATE RET_EMAIL_TOKEN
                    SET USADO_EM = UTC_TIMESTAMP()
                  WHERE ID_USUARIO = @usuarioId
-                   AND TIPO = 'CONFIRMACAO_EMAIL'
+                   AND TIPO = @tipo
                    AND USADO_EM IS NULL", connection);
             revogarAntigos.Parameters.AddWithValue("@usuarioId", usuarioId);
+            revogarAntigos.Parameters.AddWithValue("@tipo", tipo);
             await revogarAntigos.ExecuteNonQueryAsync();
 
             await using var inserir = new MySqlCommand(@"
                 INSERT INTO RET_EMAIL_TOKEN
                     (ID_USUARIO, TIPO, TOKEN_HASH, EXPIRA_EM)
                 VALUES
-                    (@usuarioId, 'CONFIRMACAO_EMAIL', @tokenHash, @expiraEm)", connection);
+                    (@usuarioId, @tipo, @tokenHash, @expiraEm)", connection);
             inserir.Parameters.AddWithValue("@usuarioId", usuarioId);
+            inserir.Parameters.AddWithValue("@tipo", tipo);
             inserir.Parameters.AddWithValue("@tokenHash", HashToken(codigo));
             inserir.Parameters.AddWithValue("@expiraEm", expiraEm);
             await inserir.ExecuteNonQueryAsync();
@@ -772,26 +697,6 @@ namespace RetaguardaAgendamentoAPI.Services.Auth
                 .Replace("+", "-")
                 .Replace("/", "_")
                 .TrimEnd('=');
-        }
-
-        private static string CriarSenhaTemporaria()
-        {
-            return "Tmp@" + CriarTokenSeguro(9).Replace("-", "").Replace("_", "").Substring(0, 8);
-        }
-
-        private static bool DeveRetornarSenhaTemporaria()
-        {
-            var flag = Environment.GetEnvironmentVariable("RETORNA_SENHA_TEMPORARIA");
-            var ambiente = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT");
-
-            return string.Equals(flag, "true", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(flag, "1", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(ambiente, "Development", StringComparison.OrdinalIgnoreCase);
-        }
-
-        private static string HashSenha(string senha, string salt)
-        {
-            return HashToken($"{salt}:{senha}");
         }
 
         private static string HashToken(string token)

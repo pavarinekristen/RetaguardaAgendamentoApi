@@ -1,7 +1,9 @@
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using RetaguardaAgendamentoAPI.Services;
 using System;
 
 namespace RetaguardaAgendamentoAPI
@@ -16,6 +18,8 @@ namespace RetaguardaAgendamentoAPI
             try
             {
                 logger.LogInformation("Iniciando RetaguardaAgendamentoAPI.");
+                var configuration = host.Services.GetRequiredService<IConfiguration>();
+                SchemaStartupCheck.VerificarAsync(configuration, logger).GetAwaiter().GetResult();
                 host.Run();
                 logger.LogInformation("RetaguardaAgendamentoAPI encerrada.");
             }
