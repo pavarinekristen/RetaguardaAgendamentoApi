@@ -344,6 +344,84 @@ Validacao da Onda 1 em 06/07/2026:
 - Hash gravado no banco confirmado como PBKDF2$210000$...
 
 
+ONDAS 2 E 3 - TASKS PENDENTES DA API (PLANO DO TECH LEAD, 06/07/2026)
+
+Ordem recomendada: SEC 4 -> SEC 5 -> SEC 6 -> INFRA 7 -> PERF 8 -> OPS 9 -> QA 10.
+Regra de corte: nenhum deploy externo sem Onda 1 completa (FEITA) + INFRA 7.
+Toda task nasce em branch feat/ a partir da developer (ver secao 17).
+
+TASK API-SEC 4 - WHITELIST E LIMITES NO SNAPSHOT (PROXIMA)
+Objetivo:
+- Impedir que cliente autenticado crie tabelas/colunas ilimitadas no agenda_operacional.
+Entregas:
+- Whitelist de tabelas em config (Snapshot:TabelasPermitidas).
+- Tabelas reais enviadas pelo WPF, confirmadas no MySQL local em 06/07/2026:
+  CLIENTES, CONSULTAS, AGENDAMENTOS, PROFISSIONAIS_SALAS (alem de EMPRESA).
+- Tabela fora da whitelist: rejeitar com 400 listando o nome.
+- Nao criar mais coluna dinamica; dado desconhecido fica so em DADOS_JSON.
+- Limites: MaxRequestBodySize no Kestrel, maximo de registros por snapshot/tabela em config.
+- Corrigir MarcarAusentesComoExcluidosAsync para nao montar NOT IN gigante (comparar via JOIN com AGENDA_SYNC_REGISTRO da execucao).
+Criterio de aceite:
+- Payload com tabela inventada nao cria nada e retorna erro controlado; sync normal do WPF continua passando.
+
+TASK API-SEC 5 - AUTENTICACAO COMO MIDDLEWARE
+Objetivo:
+- Endpoint novo nascer protegido por padrao (hoje a validacao manual e opt-in por controller).
+Entregas:
+- AuthenticationHandler proprio (RetaguardaToken) validando o Bearer e populando claims (UsuarioId, EmpresaId, Cnpj).
+- FallbackPolicy exigindo autenticacao em tudo; AllowAnonymous explicito em /auth/* (exceto /auth/me), /health e /updates/*.
+- Remover ExtrairToken duplicado dos controllers; usar claims.
+- app.UseAuthentication() antes de UseAuthorization() no Startup.
+Criterio de aceite:
+- Controller novo sem atributo retorna 401 por padrao.
+
+TASK API-SEC 6 - CICLO DE VIDA DE SESSOES
+Entregas:
+- POST /auth/logout revogando o token atual.
+- Config Auth:MaxSessoesPorUsuario (ex.: 5); login revoga as mais antigas acima do limite.
+- IHostedService diario: apagar sessoes expiradas/revogadas e tokens de e-mail usados/expirados com mais de 30 dias.
+Criterio de aceite:
+- Apos logout, token retorna 401 em /auth/me; job loga volume expurgado.
+
+TASK API-INFRA 7 - PREPARACAO PARA REVERSE PROXY (OBRIGATORIA ANTES DO DEPLOY)
+Entregas:
+- UseForwardedHeaders (X-Forwarded-For/Proto) com KnownProxies/KnownNetworks por config, ANTES do rate limiter no pipeline.
+- Sem isso, atras de Nginx/IIS o rate limit por IP enxerga so o IP do proxy.
+- Rate limit proprio em /health + cache do check MySQL por ~5s (hoje /health abre conexao a cada chamada, sem limite).
+- Aceitar forwarded headers apenas atras de proxy confiavel (config por ambiente).
+Criterio de aceite:
+- Simulando X-Forwarded-For, particoes de rate limit separadas por IP de origem.
+
+TASK API-PERF 8 - MYSQLCONNECTOR + BATCHING DO SNAPSHOT
+Entregas:
+- Trocar MySql.Data por MySqlConnector (async real; API quase identica).
+- INSERT multi-row em lotes (~500) para AGENDA_SYNC_REGISTRO, tabela final, auditoria e outbox.
+- RegistrarDispositivoAsync uma vez por execucao (hoje roda por registro).
+- Medir snapshot de 5k registros antes/depois e registrar aqui.
+Criterio de aceite:
+- Snapshot grande cai de milhares para dezenas de round-trips; smoke e sync do WPF passam.
+
+TASK API-OPS 9 - RETENCAO E EXPURGO
+Entregas:
+- Config Retencao:AuditoriaDias, Retencao:OutboxDias, Retencao:ExecucoesSync.
+- Expurgo em lotes no mesmo hosted service da SEC 6.
+- Gravar auditoria/outbox apenas quando o hash do registro mudou (corta o grosso do volume em syncs sem alteracao).
+Criterio de aceite:
+- 10 syncs identicas nao multiplicam auditoria/outbox; expurgo loga volume removido.
+
+TASK API-QA 10 - ERROS PADRONIZADOS, SWAGGER E TESTES DE INTEGRACAO HTTP
+Entregas:
+- Exception middleware unico (ArgumentException->400, UnauthorizedAccessException->401, resto->500 logado) mantendo compat com RetornoJsonErro que o WPF parseia.
+- Swagger habilitado em dev.
+- Testes com WebApplicationFactory + Testcontainers cobrindo: criar-conta -> confirmar -> login -> me; reset completo; snapshot com whitelist; rate limit.
+- Incluir no smoke-runner.ps1.
+Criterio de aceite:
+- dotnet test cobre os fluxos criticos ponta a ponta; controllers sem try/catch de infraestrutura.
+
+Observacao:
+- A TASK 6 da secao 12 (sync delta) so deve entrar DEPOIS da PERF 8, para nao construir o delta em cima do snapshot ineficiente.
+
+
 9. SITUACAO DO DOMINIO E DEPLOY WEB
 
 Estado atual:
