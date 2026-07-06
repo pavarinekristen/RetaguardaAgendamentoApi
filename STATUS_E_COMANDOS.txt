@@ -1079,3 +1079,53 @@ ORDEM RECOMENDADA PARA O WPF
 
 Proxima task recomendada pelo tech lead:
 - Fechar update automatico real, porque isso define como as correcoes serao entregues depois que o SparkCore estiver instalado na maquina do cliente.
+
+
+17. GIT - BRANCHES E FLUXO DE MERGE
+
+Estrategia definida em 06/07/2026 (vale para os DOIS repositorios):
+- API: https://github.com/pavarinekristen/RetaguardaAgendamentoApi
+- WPF: https://github.com/pavarinekristen/SistemaAgendamento
+
+Branches:
+- main      = PRODUCAO. So recebe merge vindo da developer.
+- developer = HOMOLOGACAO/integracao. Toda feature entra aqui primeiro e e testada aqui.
+- feat/...  = uma branch por task, criada A PARTIR DA developer.
+
+Fluxo:
+  feat/nome-da-task -> developer (homologar/testar) -> main (producao)
+
+Estado em 06/07/2026:
+- API:
+  - feat/api-security-hardening: Onda 1 de seguranca (PBKDF2, reset por token, schema via migrations). Commitada e no origin.
+  - developer: criada a partir da main + merge de feat/webview-hologram-installer + feat/api-security-hardening. No origin.
+  - main: AINDA SEM o holograma e SEM a Onda 1. Aguardando homologacao na developer.
+- WPF:
+  - feat/password-reset-flow: ResetPasswordWindow + AuthApiService no novo contrato. Commitada e no origin.
+  - developer: criada a partir da main + merge de feat/webview-hologram-installer + feat/password-reset-flow. No origin.
+  - main: AINDA SEM o holograma e SEM o reset de senha. Aguardando homologacao na developer.
+
+O QUE HOMOLOGAR NA developer ANTES DE MANDAR PARA A main:
+1. Subir MySQL + API (developer) e rodar o SparkCore (developer).
+2. Testar login normal.
+3. Testar Esqueceu?: pedir codigo, redefinir senha na ResetPasswordWindow, logar com a senha nova.
+4. Confirmar que a senha antiga para de funcionar e que a sessao antiga cai.
+5. Testar sync automatica (snapshot) apos o login.
+
+MERGE FINAL PARA PRODUCAO (rodar em CADA repositorio depois da homologacao aprovada):
+
+cd C:\Users\krist\RetaguardaAgendamentoAPI   (e depois o mesmo em C:\Users\krist\AgendamentoWpfApp)
+git switch main
+git merge developer
+git push origin main
+git switch developer
+
+Alternativa via GitHub: abrir pull request developer -> main em cada repositorio.
+
+Regras:
+- Nao commitar direto na main nem na developer; sempre via branch feat/.
+- Criar branch nova sempre a partir da developer atualizada:
+  git switch developer
+  git pull
+  git switch -c feat/nome-da-task
+- Depois que a feature entrar na developer e for homologada, a feat/ pode ser apagada.
