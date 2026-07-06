@@ -125,6 +125,28 @@ namespace RetaguardaAgendamentoAPI.Controllers.Auth
             }
         }
 
+        [HttpPost("redefinir-senha")]
+        public async Task<IActionResult> RedefinirSenha([FromBody] RedefinirSenhaRequest request)
+        {
+            try
+            {
+                return Ok(await _service.RedefinirSenhaAsync(request));
+            }
+            catch (ArgumentException ex)
+            {
+                return StatusCode(400, new RetornoJsonErro(400, ex.Message, null));
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return StatusCode(401, new RetornoJsonErro(401, ex.Message, null));
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Erro no servidor [Redefinir Senha].");
+                return StatusCode(500, new RetornoJsonErro(500, "Erro no servidor [Redefinir Senha]", ex));
+            }
+        }
+
         [HttpGet("me")]
         public async Task<IActionResult> Me()
         {

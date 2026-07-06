@@ -46,9 +46,21 @@ namespace RetaguardaAgendamentoAPI.Models.Auth
     public class RecuperarSenhaResponse
     {
         public bool Sucesso { get; set; }
-        public bool SenhaAlterada { get; set; }
         public string Mensagem { get; set; }
-        public string SenhaTemporaria { get; set; }
+        public string CodigoResetTeste { get; set; }
+    }
+
+    public class RedefinirSenhaRequest
+    {
+        public string Email { get; set; }
+        public string Codigo { get; set; }
+        public string NovaSenha { get; set; }
+    }
+
+    public class RedefinirSenhaResponse
+    {
+        public bool Sucesso { get; set; }
+        public string Mensagem { get; set; }
     }
 
     public class AuthResponse

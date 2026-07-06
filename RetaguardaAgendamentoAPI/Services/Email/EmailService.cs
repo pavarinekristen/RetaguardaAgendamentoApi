@@ -23,7 +23,23 @@ namespace RetaguardaAgendamentoAPI.Services.Email
         public bool ReturnConfirmationCodeInResponse =>
             _configuration.GetValue<bool>("Email:ReturnConfirmationCodeInResponse");
 
-        public async Task EnviarCodigoConfirmacaoAsync(string destino, string nome, string codigo)
+        public Task EnviarCodigoConfirmacaoAsync(string destino, string nome, string codigo)
+        {
+            return EnviarAsync(
+                destino,
+                "Codigo de confirmacao da sua conta",
+                MontarCorpoConfirmacao(nome, codigo));
+        }
+
+        public Task EnviarCodigoRedefinicaoSenhaAsync(string destino, string nome, string codigo)
+        {
+            return EnviarAsync(
+                destino,
+                "Codigo para redefinir sua senha",
+                MontarCorpoRedefinicaoSenha(nome, codigo));
+        }
+
+        private async Task EnviarAsync(string destino, string assunto, string corpo)
         {
             if (!Enabled)
                 throw new InvalidOperationException("Envio de e-mail nao esta habilitado.");
@@ -39,8 +55,8 @@ namespace RetaguardaAgendamentoAPI.Services.Email
             using var message = new MailMessage
             {
                 From = new MailAddress(from, displayName),
-                Subject = "Codigo de confirmacao da sua conta",
-                Body = MontarCorpo(nome, codigo),
+                Subject = assunto,
+                Body = corpo,
                 IsBodyHtml = false
             };
             message.To.Add(destino);
@@ -53,13 +69,13 @@ namespace RetaguardaAgendamentoAPI.Services.Email
 
             try
             {
-                _logger.LogInformation("Enviando e-mail de confirmacao para {Destino} via {Host}:{Port}.", destino, host, port);
+                _logger.LogInformation("Enviando e-mail '{Assunto}' para {Destino} via {Host}:{Port}.", assunto, destino, host, port);
                 await client.SendMailAsync(message);
-                _logger.LogInformation("E-mail de confirmacao enviado para {Destino}.", destino);
+                _logger.LogInformation("E-mail '{Assunto}' enviado para {Destino}.", assunto, destino);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Falha SMTP ao enviar codigo de confirmacao para {Destino}. Host={Host}; Port={Port}", destino, host, port);
+                _logger.LogError(ex, "Falha SMTP ao enviar e-mail '{Assunto}' para {Destino}. Host={Host}; Port={Port}", assunto, destino, host, port);
                 throw;
             }
         }
@@ -73,7 +89,7 @@ namespace RetaguardaAgendamentoAPI.Services.Email
             return valor.Trim();
         }
 
-        private static string MontarCorpo(string nome, string codigo)
+        private static string MontarCorpoConfirmacao(string nome, string codigo)
         {
             var saudacao = string.IsNullOrWhiteSpace(nome) ? "Ola" : $"Ola, {nome}";
             return $@"{saudacao}.
@@ -85,6 +101,22 @@ Seu codigo de confirmacao da Retaguarda Agendamento e:
 Este codigo expira em 30 minutos.
 
 Se voce nao solicitou esta conta, ignore este e-mail.";
+        }
+
+        private static string MontarCorpoRedefinicaoSenha(string nome, string codigo)
+        {
+            var saudacao = string.IsNullOrWhiteSpace(nome) ? "Ola" : $"Ola, {nome}";
+            return $@"{saudacao}.
+
+Recebemos um pedido para redefinir a senha da sua conta na Retaguarda Agendamento.
+
+Seu codigo de redefinicao e:
+
+{codigo}
+
+Este codigo expira em 30 minutos. Sua senha atual continua valida ate a redefinicao ser concluida.
+
+Se voce nao solicitou a redefinicao, ignore este e-mail.";
         }
     }
 }

@@ -1,7 +1,9 @@
 ﻿using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
 using MySql.Data.MySqlClient;
 using RetaguardaAgendamentoAPI.Models.Auth;
 using RetaguardaAgendamentoAPI.Services.Auth;
+using RetaguardaAgendamentoAPI.Services.Email;
 using RetaguardaAgendamentoAPI.Util;
 using Testcontainers.MySql;
 using Xunit;
@@ -26,9 +28,107 @@ public sealed class MySqlFixture : IAsyncLifetime
     {
         await _container.StartAsync();
         ConnectionString = _container.GetConnectionString();
+        await CriarSchemaAsync();
     }
 
     public async Task DisposeAsync() => await _container.DisposeAsync();
+
+    /// <summary>
+    /// O schema e responsabilidade das migrations (mysql-migrations/001_baseline_schema.sql);
+    /// a API nao cria mais tabelas em runtime. Aqui replicamos as tabelas de auth do baseline
+    /// no banco do container.
+    /// </summary>
+    private async Task CriarSchemaAsync()
+    {
+        const string ddl = @"
+            CREATE TABLE IF NOT EXISTS `EMPRESA` (
+              `ID` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+              `RAZAO_SOCIAL` VARCHAR(150) NULL,
+              `NOME_FANTASIA` VARCHAR(150) NULL,
+              `CNPJ` VARCHAR(14) NULL,
+              `INSCRICAO_ESTADUAL` VARCHAR(30) NULL,
+              `INSCRICAO_MUNICIPAL` VARCHAR(30) NULL,
+              `TIPO_REGIME` CHAR(1) NULL,
+              `CRT` CHAR(1) NULL,
+              `DATA_CONSTITUICAO` DATE NULL,
+              `TIPO` CHAR(1) NULL,
+              `EMAIL` VARCHAR(250) NULL,
+              `LOGRADOURO` VARCHAR(250) NULL,
+              `NUMERO` VARCHAR(10) NULL,
+              `COMPLEMENTO` VARCHAR(100) NULL,
+              `CEP` VARCHAR(8) NULL,
+              `BAIRRO` VARCHAR(100) NULL,
+              `CIDADE` VARCHAR(100) NULL,
+              `UF` CHAR(2) NULL,
+              `FONE` VARCHAR(15) NULL,
+              `CONTATO` VARCHAR(30) NULL,
+              `CODIGO_IBGE_CIDADE` INT UNSIGNED NULL,
+              `CODIGO_IBGE_UF` INT UNSIGNED NULL,
+              `LOGOTIPO` TEXT NULL,
+              `REGISTRADO` CHAR(1) NULL DEFAULT 'P',
+              `NATUREZA_JURIDICA` VARCHAR(200) NULL,
+              `SIMEI` CHAR(1) NULL,
+              `EMAIL_PAGAMENTO` VARCHAR(250) NULL,
+              `DATA_REGISTRO` DATE NULL,
+              `HORA_REGISTRO` VARCHAR(8) NULL,
+              PRIMARY KEY (`ID`),
+              UNIQUE KEY `UK_EMPRESA_CNPJ` (`CNPJ`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+            CREATE TABLE IF NOT EXISTS `RET_USUARIO` (
+              `ID` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+              `ID_EMPRESA` INT UNSIGNED NOT NULL,
+              `NOME` VARCHAR(150) NULL,
+              `LOGIN` VARCHAR(80) NOT NULL,
+              `EMAIL` VARCHAR(180) NULL,
+              `SENHA_HASH` VARCHAR(128) NOT NULL,
+              `SENHA_SALT` VARCHAR(64) NOT NULL,
+              `PERFIL` VARCHAR(30) NOT NULL DEFAULT 'Administrador',
+              `CONFIRMADO` CHAR(1) NOT NULL DEFAULT 'P',
+              `CONFIRMADO_EM` DATETIME NULL,
+              `ATIVO` CHAR(1) NOT NULL DEFAULT 'S',
+              `CRIADO_EM` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              `ULTIMO_LOGIN` DATETIME NULL,
+              PRIMARY KEY (`ID`),
+              UNIQUE KEY `UK_RET_USUARIO_EMPRESA_LOGIN` (`ID_EMPRESA`, `LOGIN`),
+              UNIQUE KEY `UK_RET_USUARIO_EMAIL` (`EMAIL`),
+              CONSTRAINT `FK_RET_USUARIO_EMPRESA`
+                FOREIGN KEY (`ID_EMPRESA`) REFERENCES `EMPRESA` (`ID`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+            CREATE TABLE IF NOT EXISTS `RET_SESSAO` (
+              `ID` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+              `ID_USUARIO` INT UNSIGNED NOT NULL,
+              `TOKEN_HASH` VARCHAR(128) NOT NULL,
+              `CRIADO_EM` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              `EXPIRA_EM` DATETIME NOT NULL,
+              `REVOGADO` CHAR(1) NOT NULL DEFAULT 'N',
+              PRIMARY KEY (`ID`),
+              UNIQUE KEY `UK_RET_SESSAO_TOKEN` (`TOKEN_HASH`),
+              CONSTRAINT `FK_RET_SESSAO_USUARIO`
+                FOREIGN KEY (`ID_USUARIO`) REFERENCES `RET_USUARIO` (`ID`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+            CREATE TABLE IF NOT EXISTS `RET_EMAIL_TOKEN` (
+              `ID` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+              `ID_USUARIO` INT UNSIGNED NOT NULL,
+              `TIPO` VARCHAR(40) NOT NULL,
+              `TOKEN_HASH` VARCHAR(128) NOT NULL,
+              `CRIADO_EM` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              `EXPIRA_EM` DATETIME NOT NULL,
+              `USADO_EM` DATETIME NULL,
+              PRIMARY KEY (`ID`),
+              INDEX `IX_RET_EMAIL_TOKEN_USUARIO_TIPO` (`ID_USUARIO`, `TIPO`),
+              INDEX `IX_RET_EMAIL_TOKEN_HASH` (`TOKEN_HASH`),
+              CONSTRAINT `FK_RET_EMAIL_TOKEN_USUARIO`
+                FOREIGN KEY (`ID_USUARIO`) REFERENCES `RET_USUARIO` (`ID`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;";
+
+        await using var connection = new MySqlConnection(ConnectionString);
+        await connection.OpenAsync();
+        await using var command = new MySqlCommand(ddl, connection);
+        await command.ExecuteNonQueryAsync();
+    }
 }
 
 /// <summary>
@@ -51,10 +151,14 @@ public class AuthServiceTests : IClassFixture<MySqlFixture>
         var config = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
-                ["ConnectionStrings:DefaultConnection"] = connectionString
+                ["ConnectionStrings:DefaultConnection"] = connectionString,
+                // Envio SMTP desabilitado; codigos de confirmacao/reset voltam na resposta (modo teste).
+                ["Email:Enabled"] = "false",
+                ["Email:ReturnConfirmationCodeInResponse"] = "true"
             })
             .Build();
-        return new AuthService(config);
+        var emailService = new EmailService(config, NullLogger<EmailService>.Instance);
+        return new AuthService(config, emailService);
     }
 
     // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -292,6 +396,49 @@ public class AuthServiceTests : IClassFixture<MySqlFixture>
     }
 
     [Fact]
+    public async Task Login_HashLegadoSha256_AutenticaEFazRehashParaPbkdf2()
+    {
+        var req = Conta("legado_rehash@test.com", "11222333000181");
+        await _service.CriarContaAsync(req);
+        await ConfirmarEmpresaEUsuario(req.Email, Normaliza(req.Cnpj));
+
+        // Regrava o usuario com hash no formato legado SHA256(salt:senha).
+        const string saltLegado = "salt-legado-teste";
+        var hashLegado = Convert.ToHexString(
+            System.Security.Cryptography.SHA256.HashData(
+                System.Text.Encoding.UTF8.GetBytes($"{saltLegado}:{req.Senha}"))).ToLowerInvariant();
+        await AtualizarHashDireto(req.Email, hashLegado, saltLegado);
+
+        var login = await _service.LoginAsync(new LoginRequest
+        {
+            Email = req.Email,
+            Senha = req.Senha
+        });
+        Assert.NotEmpty(login.Token);
+
+        // Apos o login, o hash deve ter sido regravado em PBKDF2 e a senha continua valida.
+        var hashAtual = await LerHashDireto(req.Email);
+        Assert.StartsWith("PBKDF2$", hashAtual);
+
+        var loginNovamente = await _service.LoginAsync(new LoginRequest
+        {
+            Email = req.Email,
+            Senha = req.Senha
+        });
+        Assert.NotEmpty(loginNovamente.Token);
+    }
+
+    [Fact]
+    public async Task CriarConta_GravaSenhaEmFormatoPbkdf2()
+    {
+        var req = Conta("formato_pbkdf2@test.com", "11222333000181");
+        await _service.CriarContaAsync(req);
+
+        var hash = await LerHashDireto(req.Email);
+        Assert.StartsWith("PBKDF2$", hash);
+    }
+
+    [Fact]
     public async Task Login_RetornaEmpresaCorretaDoUsuario()
     {
         var req = Conta("empresa_check@test.com", "11222333000181");
@@ -313,7 +460,7 @@ public class AuthServiceTests : IClassFixture<MySqlFixture>
     // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
     [Fact]
-    public async Task RecuperarSenha_EmailCadastrado_RetornaSucessoComAlteracao()
+    public async Task RecuperarSenha_EmailCadastrado_GeraCodigoENaoAlteraSenha()
     {
         var req = Conta("recover@test.com", "11222333000181");
         await _service.CriarContaAsync(req);
@@ -325,11 +472,19 @@ public class AuthServiceTests : IClassFixture<MySqlFixture>
         });
 
         Assert.True(result.Sucesso);
-        Assert.True(result.SenhaAlterada);
+        Assert.NotEmpty(result.CodigoResetTeste!);
+
+        // Solicitar reset NAO pode derrubar a senha atual (anti account-DoS).
+        var login = await _service.LoginAsync(new LoginRequest
+        {
+            Email = req.Email,
+            Senha = req.Senha
+        });
+        Assert.NotEmpty(login.Token);
     }
 
     [Fact]
-    public async Task RecuperarSenha_EmailNaoCadastrado_RetornaSucessoSemAlterar()
+    public async Task RecuperarSenha_EmailNaoCadastrado_RetornaRespostaGenericaSemCodigo()
     {
         // Resposta genÃ©rica por seguranÃ§a â€” nÃ£o revela se email existe
         var result = await _service.RecuperarSenhaAsync(new RecuperarSenhaRequest
@@ -338,7 +493,7 @@ public class AuthServiceTests : IClassFixture<MySqlFixture>
         });
 
         Assert.True(result.Sucesso);
-        Assert.False(result.SenhaAlterada);
+        Assert.Null(result.CodigoResetTeste);
     }
 
     [Theory]
@@ -353,46 +508,96 @@ public class AuthServiceTests : IClassFixture<MySqlFixture>
     }
 
     [Fact]
-    public async Task RecuperarSenha_SenhaTemporaria_PermiteLoginComNovaSenha()
+    public async Task RedefinirSenha_CodigoValido_TrocaSenhaERevogaSessoes()
     {
-        var req = Conta("tmpsenha@test.com", "11222333000181");
+        var req = Conta("redefinir_ok@test.com", "11222333000181");
         await _service.CriarContaAsync(req);
         await ConfirmarEmpresaEUsuario(req.Email, Normaliza(req.Cnpj));
 
-        Environment.SetEnvironmentVariable("RETORNA_SENHA_TEMPORARIA", "true");
-        var recuperacao = await _service.RecuperarSenhaAsync(new RecuperarSenhaRequest
-        {
-            Email = req.Email
-        });
-        Environment.SetEnvironmentVariable("RETORNA_SENHA_TEMPORARIA", null);
-
-        Assert.NotEmpty(recuperacao.SenhaTemporaria!);
-
-        var loginResult = await _service.LoginAsync(new LoginRequest
+        var loginAntigo = await _service.LoginAsync(new LoginRequest
         {
             Email = req.Email,
-            Senha = recuperacao.SenhaTemporaria!
+            Senha = req.Senha
+        });
+        Assert.NotEmpty(loginAntigo.Token);
+
+        var recuperacao = await _service.RecuperarSenhaAsync(new RecuperarSenhaRequest { Email = req.Email });
+        var resultado = await _service.RedefinirSenhaAsync(new RedefinirSenhaRequest
+        {
+            Email = req.Email,
+            Codigo = recuperacao.CodigoResetTeste!,
+            NovaSenha = "NovaSenha@456"
         });
 
-        Assert.NotEmpty(loginResult.Token);
+        Assert.True(resultado.Sucesso);
+
+        // Senha original deixa de funcionar.
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            _service.LoginAsync(new LoginRequest { Email = req.Email, Senha = req.Senha }));
+
+        // Nova senha funciona.
+        var loginNovo = await _service.LoginAsync(new LoginRequest
+        {
+            Email = req.Email,
+            Senha = "NovaSenha@456"
+        });
+        Assert.NotEmpty(loginNovo.Token);
+
+        // Sessao anterior foi revogada.
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            _service.ValidarTokenAsync(loginAntigo.Token));
     }
 
     [Fact]
-    public async Task RecuperarSenha_SenhaOriginalNaoFunciona_AposRecuperacao()
+    public async Task RedefinirSenha_CodigoInvalido_LancaUnauthorizedAccessException()
     {
-        var req = Conta("invalida_pos_rec@test.com", "11222333000181");
+        var req = Conta("redefinir_cod_errado@test.com", "11222333000181");
         await _service.CriarContaAsync(req);
         await ConfirmarEmpresaEUsuario(req.Email, Normaliza(req.Cnpj));
 
-        Environment.SetEnvironmentVariable("RETORNA_SENHA_TEMPORARIA", "true");
         await _service.RecuperarSenhaAsync(new RecuperarSenhaRequest { Email = req.Email });
-        Environment.SetEnvironmentVariable("RETORNA_SENHA_TEMPORARIA", null);
 
         await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
-            _service.LoginAsync(new LoginRequest
+            _service.RedefinirSenhaAsync(new RedefinirSenhaRequest
             {
                 Email = req.Email,
-                Senha = req.Senha  // senha original â€” deve falhar
+                Codigo = "000000",
+                NovaSenha = "NovaSenha@456"
+            }));
+    }
+
+    [Fact]
+    public async Task RedefinirSenha_CodigoUsadoDuasVezes_SegundaFalha()
+    {
+        var req = Conta("redefinir_reuso@test.com", "11222333000181");
+        await _service.CriarContaAsync(req);
+        await ConfirmarEmpresaEUsuario(req.Email, Normaliza(req.Cnpj));
+
+        var recuperacao = await _service.RecuperarSenhaAsync(new RecuperarSenhaRequest { Email = req.Email });
+        var redefinir = new RedefinirSenhaRequest
+        {
+            Email = req.Email,
+            Codigo = recuperacao.CodigoResetTeste!,
+            NovaSenha = "NovaSenha@456"
+        };
+
+        await _service.RedefinirSenhaAsync(redefinir);
+
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            _service.RedefinirSenhaAsync(redefinir));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("1234567")]
+    public async Task RedefinirSenha_NovaSenhaCurta_LancaArgumentException(string novaSenha)
+    {
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            _service.RedefinirSenhaAsync(new RedefinirSenhaRequest
+            {
+                Email = "qualquer@test.com",
+                Codigo = "123456",
+                NovaSenha = novaSenha
             }));
     }
 
@@ -535,6 +740,28 @@ public class AuthServiceTests : IClassFixture<MySqlFixture>
             "UPDATE RET_USUARIO SET ATIVO='N' WHERE LOWER(EMAIL)=@e", conn);
         cmd.Parameters.AddWithValue("@e", email.ToLower());
         await cmd.ExecuteNonQueryAsync();
+    }
+
+    private async Task AtualizarHashDireto(string email, string senhaHash, string salt)
+    {
+        await using var conn = new MySqlConnection(_cs);
+        await conn.OpenAsync();
+        await using var cmd = new MySqlCommand(
+            "UPDATE RET_USUARIO SET SENHA_HASH=@h, SENHA_SALT=@s WHERE LOWER(EMAIL)=@e", conn);
+        cmd.Parameters.AddWithValue("@h", senhaHash);
+        cmd.Parameters.AddWithValue("@s", salt);
+        cmd.Parameters.AddWithValue("@e", email.ToLower());
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    private async Task<string> LerHashDireto(string email)
+    {
+        await using var conn = new MySqlConnection(_cs);
+        await conn.OpenAsync();
+        await using var cmd = new MySqlCommand(
+            "SELECT SENHA_HASH FROM RET_USUARIO WHERE LOWER(EMAIL)=@e LIMIT 1", conn);
+        cmd.Parameters.AddWithValue("@e", email.ToLower());
+        return (await cmd.ExecuteScalarAsync())?.ToString() ?? string.Empty;
     }
 
     private async Task ExpirarToken(string token)
