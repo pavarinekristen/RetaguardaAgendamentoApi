@@ -1,5 +1,5 @@
 SPARKCORE - STATUS OFICIAL DO PROJETO
-Atualizado em: 05/07/2026
+Atualizado em: 06/07/2026
 
 Este arquivo e a fonte principal para retomar o projeto.
 Historico antigo, comandos repetidos e registros de tentativa foram removidos.
@@ -48,7 +48,17 @@ Publish de teste do WPF:
 - Framework-dependent: C:\tmp\AgendamentoWpfApp-publish-test
 - Self-contained single file: C:\tmp\AgendamentoWpfApp-selfcontained-test
 - Executavel self-contained: C:\tmp\AgendamentoWpfApp-selfcontained-test\AgendamentoWpfApp.exe
-- Tamanho aproximado: 169 MB
+- Assets locais do holograma/WebView2 incluidos:
+  - C:\tmp\AgendamentoWpfApp-selfcontained-test\Assets\login-hologram.html
+  - C:\tmp\AgendamentoWpfApp-selfcontained-test\Assets\hologram\three.js
+  - C:\tmp\AgendamentoWpfApp-selfcontained-test\Assets\hologram\GLTFLoader.js
+  - C:\tmp\AgendamentoWpfApp-selfcontained-test\Assets\hologram\LeePerrySmith.glb
+- Tamanho aproximado: 169 MB do executavel principal, mais assets do holograma.
+
+Instalador WPF atual:
+- C:\Users\krist\AgendamentoWpfApp\artifacts\installer\SparkCore-Setup-1.0.2.exe
+- Tamanho aproximado: 75 MB
+- Gerado com Inno Setup a partir do publish self-contained em C:\tmp\AgendamentoWpfApp-selfcontained-test
 
 Publish de teste da API:
 - C:\tmp\RetaguardaAgendamentoAPI-publish-test
@@ -75,6 +85,7 @@ MySQL local:
 WPF:
 - Login sem dados preenchidos automaticamente.
 - Tela de login aprovada visualmente.
+- Login atualizado com holograma 3D real via WebView2 + Three.js, com assets locais/offline.
 - Nome visual do sistema definido como SparkCore.
 - Cadastro de cliente implementado.
 - Agenda/consultas implementada.
@@ -191,6 +202,26 @@ Resultado:
 - Publish gerado com sucesso.
 - Arquivo principal: AgendamentoWpfApp.exe
 - Tamanho aproximado: 169 MB.
+- Validado em 06/07/2026:
+  - publish contem Assets\login-hologram.html
+  - publish contem Assets\hologram\three.js
+  - publish contem Assets\hologram\GLTFLoader.js
+  - publish contem Assets\hologram\LeePerrySmith.glb
+  - WebView2 carrega o holograma por host local virtual:
+    https://sparkcore.local/login-hologram.html
+
+Instalador WPF 1.0.2:
+
+C:\Users\krist\AgendamentoWpfApp\artifacts\installer\SparkCore-Setup-1.0.2.exe
+
+Resultado:
+- Instalador gerado com sucesso pelo Inno Setup.
+- Tamanho aproximado: 75 MB.
+- Log de compilacao confirmou empacotamento de:
+  - Assets\login-hologram.html
+  - Assets\hologram\three.js
+  - Assets\hologram\GLTFLoader.js
+  - Assets\hologram\LeePerrySmith.glb
 
 Publish API:
 
@@ -214,10 +245,19 @@ Pontos fortes:
 - SyncStatusStore persiste estado da sincronizacao e loga falhas.
 - AppSettings permite trocar URL da API por variavel de ambiente.
 - LocalSqliteBackupService protege o agenda.sqlite com backup diario/manual.
+- Login usa WebView2 para renderizar holograma 3D real com Three.js e modelo GLB local.
+- Instalador Inno Setup versionado e gerado para a versao 1.0.2.
 
 Arquivos relevantes:
 - C:\Users\krist\AgendamentoWpfApp\App.xaml.cs
 - C:\Users\krist\AgendamentoWpfApp\AppSettings.cs
+- C:\Users\krist\AgendamentoWpfApp\MainWindow.xaml
+- C:\Users\krist\AgendamentoWpfApp\MainWindow.xaml.cs
+- C:\Users\krist\AgendamentoWpfApp\Assets\login-hologram.html
+- C:\Users\krist\AgendamentoWpfApp\Assets\hologram\three.js
+- C:\Users\krist\AgendamentoWpfApp\Assets\hologram\GLTFLoader.js
+- C:\Users\krist\AgendamentoWpfApp\Assets\hologram\LeePerrySmith.glb
+- C:\Users\krist\AgendamentoWpfApp\Installer\SparkCore.iss
 - C:\Users\krist\AgendamentoWpfApp\DashboardWindow.xaml.cs
 - C:\Users\krist\AgendamentoWpfApp\DashboardWindow.Clientes.cs
 - C:\Users\krist\AgendamentoWpfApp\DashboardWindow.Agenda.cs
@@ -232,11 +272,8 @@ Arquivos relevantes:
 - C:\Users\krist\AgendamentoWpfApp\AgendamentoWpfApp.Smoke
 
 Pontos ainda fracos:
-- Falta instalador oficial versionado.
-- Falta script Inno Setup salvo no repositorio.
 - Icone/app branding final no executavel implementado com SparkCore.ico.
 - Falta fluxo de primeira configuracao mais amigavel para URL da API, caso nao seja localhost.
-- Falta restore local assistido do SQLite.
 - Falta log local consolidado para suporte tecnico.
 - Falta teste de UI real de clique/tela.
 
@@ -311,54 +348,27 @@ Posicao tecnica:
 10. INSTALADOR
 
 Estado:
-- O publish self-contained do WPF ja foi gerado.
-- O Inno Setup pode criar instalador usando:
-  C:\tmp\AgendamentoWpfApp-selfcontained-test\AgendamentoWpfApp.exe
-
-Script base recomendado para Inno Setup:
-
-#define MyAppName "SparkCore"
-#define MyAppVersion "1.0.0"
-#define MyAppPublisher "Sparkware"
-#define MyAppExeName "AgendamentoWpfApp.exe"
-
-[Setup]
-AppId={{6B3D1C5A-8944-4C5C-94A4-27D68897E3D2}
-AppName={#MyAppName}
-AppVersion={#MyAppVersion}
-AppPublisher={#MyAppPublisher}
-DefaultDirName={localappdata}\Programs\SparkCore
-DefaultGroupName=SparkCore
-DisableProgramGroupPage=yes
-OutputDir=C:\tmp\SparkCoreInstaller
-OutputBaseFilename=SparkCore-Setup
-Compression=lzma
-SolidCompression=yes
-WizardStyle=modern
-PrivilegesRequired=lowest
-UninstallDisplayName=SparkCore
-SetupLogging=yes
-
-[Languages]
-Name: "brazilianportuguese"; MessagesFile: "compiler:Languages\BrazilianPortuguese.isl"
-
-[Tasks]
-Name: "desktopicon"; Description: "Criar atalho na Area de Trabalho"; GroupDescription: "Atalhos:"; Flags: unchecked
-
-[Files]
-Source: "C:\tmp\AgendamentoWpfApp-selfcontained-test\AgendamentoWpfApp.exe"; DestDir: "{app}"; Flags: ignoreversion
-
-[Icons]
-Name: "{group}\SparkCore"; Filename: "{app}\{#MyAppExeName}"
-Name: "{autodesktop}\SparkCore"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
-
-[Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "Abrir SparkCore"; Flags: nowait postinstall skipifsilent
+- Publish self-contained do WPF gerado em:
+  C:\tmp\AgendamentoWpfApp-selfcontained-test
+- Instalador Inno Setup 1.0.2 gerado em:
+  C:\Users\krist\AgendamentoWpfApp\artifacts\installer\SparkCore-Setup-1.0.2.exe
+- Script versionado do instalador:
+  C:\Users\krist\AgendamentoWpfApp\Installer\SparkCore.iss
+- O instalador precisa empacotar a pasta inteira do publish, nao apenas AgendamentoWpfApp.exe.
+- Motivo: o login atual depende de WebView2 + assets locais do holograma:
+  - Assets\login-hologram.html
+  - Assets\hologram\three.js
+  - Assets\hologram\GLTFLoader.js
+  - Assets\hologram\LeePerrySmith.glb
+- Versao atual configurada no script:
+  1.0.2
+- Output atual configurado no script:
+  C:\Users\krist\AgendamentoWpfApp\artifacts\installer
 
 Observacoes:
 - Para teste local, instalador pode apontar para localhost implicitamente.
 - Para teste em outra maquina, sera necessario configurar AGENDAMENTO_RETAGUARDA_URL.
-- Antes de entregar para cliente, salvar o script .iss dentro do projeto e versionar o numero.
+- Nao voltar ao modelo antigo que copiava somente AgendamentoWpfApp.exe, pois isso remove os assets do WebView2 e faz o holograma sumir.
 
 
 11. DECISAO TECNICA ATUAL
@@ -384,10 +394,10 @@ Objetivo:
 - Transformar o publish WPF em um instalador reproduzivel.
 
 Entregas:
-- Criar pasta Installer no projeto WPF.
-- Salvar script SparkCore.iss.
-- Definir versao 1.0.0-test.
-- Gerar SparkCore-Setup.exe.
+- Criar pasta Installer no projeto WPF. FEITO
+- Salvar script SparkCore.iss. FEITO
+- Definir versao 1.0.2. FEITO
+- Gerar SparkCore-Setup-1.0.2.exe. FEITO
 - Instalar em maquina local.
 - Validar abrir, login, criar conta, cadastrar cliente e marcar consulta.
 
@@ -582,20 +592,28 @@ Criterio de aceite:
 
 13. ORDEM RECOMENDADA A PARTIR DE AGORA
 
-Status resumido em 05/07/2026:
-- TASK 1 - Instalador oficial de teste: feito/testado segundo confirmacao do projeto.
+Status resumido em 06/07/2026:
+- TASK 1 - Instalador oficial de teste: feito/testado; versao atual gerada: SparkCore-Setup-1.0.2.exe.
 - TASK 2 - URL da API no instalador: adiada; manter localhost ate confirmar dominio/hospedagem.
 - TASK 3 - Backup local SQLite: feito, incluindo restore assistido.
 - TASK 4 - Endurecer API: parcialmente feito; logs claros adicionados; pendem CORS final e HTTPS/reverse proxy em ambiente real.
 - TASK 5 - Migrations MySQL: estrategia definida, arquivos criados e baseline aplicada no MySQL local.
 - TASK 6 - Sincronizacao delta/conflitos: pendente.
 - TASK 7 - PDF/laudo final: pendente por falta do modelo do cliente.
-- TASK 8 - Qualidade visual final WPF: pendente.
+- TASK 8 - Qualidade visual final WPF: parcialmente feita; login com holograma 3D real via WebView2 finalizado, restantes telas pequenas/validacao visual ainda pendentes.
 - Icone/branding basico do SparkCore aplicado no WPF:
   - C:\Users\krist\AgendamentoWpfApp\Assets\SparkCore.ico
   - C:\Users\krist\AgendamentoWpfApp\Assets\SparkCore-256.png
   - ApplicationIcon configurado no AgendamentoWpfApp.csproj
   - Icon configurado em MainWindow, CreateAccountWindow e DashboardWindow
+- Login com holograma 3D real:
+  - WebView2 em MainWindow
+  - Assets\login-hologram.html
+  - Assets\hologram\three.js
+  - Assets\hologram\GLTFLoader.js
+  - Assets\hologram\LeePerrySmith.glb
+- Instalador atual:
+  - C:\Users\krist\AgendamentoWpfApp\artifacts\installer\SparkCore-Setup-1.0.2.exe
 
 Prioridade imediata:
 1. Rodar teste instalado do SparkCore com API local, quando precisar repetir a validacao:
@@ -606,16 +624,15 @@ Prioridade imediata:
    - marcar consulta;
    - conferir sync automatica;
    - conferir backup em Configuracoes.
-2. Gerar novo instalador com a versao atualizada depois dos ajustes finais.
-3. Confirmar se o teste sera somente na maquina local ou em outra maquina na rede.
+2. Confirmar se o teste sera somente na maquina local ou em outra maquina na rede.
+3. Se for testar o instalador 1.0.2 em maquina limpa, validar que o holograma abre sem internet.
 
 Prioridade antes de teste com cliente:
 1. Confirmar se o teste sera somente na maquina local ou em outra maquina na rede.
 2. Se for outra maquina, configurar AGENDAMENTO_RETAGUARDA_URL com IP do servidor local.
 3. Validar firewall/porta 5000 se API precisar ser acessada por outro computador.
 4. Garantir backup local funcionando antes de inserir dados reais.
-5. Gerar novo instalador com versao atualizada depois dos ajustes finais.
-6. Validar fluxo completo instalado, nao apenas via Visual Studio/dotnet run.
+5. Validar fluxo completo instalado usando SparkCore-Setup-1.0.2.exe, nao apenas via Visual Studio/dotnet run.
 
 Prioridade para pre-producao/deploy externo:
 1. Confirmar dominio do cliente.
@@ -687,6 +704,10 @@ Publish WPF self-contained:
 
 dotnet publish C:\Users\krist\AgendamentoWpfApp\AgendamentoWpfApp.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o C:\tmp\AgendamentoWpfApp-selfcontained-test
 
+Gerar instalador WPF 1.0.2:
+
+& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "C:\Users\krist\AgendamentoWpfApp\Installer\SparkCore.iss"
+
 Publish API:
 
 dotnet publish C:\Users\krist\RetaguardaAgendamentoAPI\RetaguardaAgendamentoAPI\RetaguardaAgendamentoAPI.csproj -c Release -o C:\tmp\RetaguardaAgendamentoAPI-publish-test
@@ -717,6 +738,7 @@ Escopo desta secao:
 
 Estado atual do WPF:
 - Login, criacao de conta e confirmacao de e-mail usando API.
+- Login com holograma 3D real via WebView2 + Three.js, carregando assets locais/offline por host virtual sparkcore.local.
 - Dashboard com Clientes, Agenda, Profissionais/Salas, Configuracoes e Laudos exemplo.
 - SQLite local com EF Core migrations.
 - Cadastro de cliente, profissional/sala e consulta.
@@ -724,10 +746,15 @@ Estado atual do WPF:
 - Sincronizacao automatica por snapshot completo.
 - Backup local automatico/manual.
 - Restore assistido do SQLite implementado.
-- Instalador Inno Setup funcionando.
+- Instalador Inno Setup funcionando; versao atual gerada: SparkCore-Setup-1.0.2.exe.
 - Icone/branding basico aplicado:
   - Assets\SparkCore.ico
   - Assets\SparkCore-256.png
+- Assets locais do holograma:
+  - Assets\login-hologram.html
+  - Assets\hologram\three.js
+  - Assets\hologram\GLTFLoader.js
+  - Assets\hologram\LeePerrySmith.glb
 - Updater existe e e disparado ao fechar o app pelo App.xaml.cs.
 
 Risco tecnico principal:
@@ -769,18 +796,22 @@ Objetivo:
 - Ter build instalavel limpo com branding atual.
 
 Estado atual:
-- Instalador 1.0.1 foi gerado com sucesso em:
-  C:\Users\krist\AgendamentoWpfApp\artifacts\installer\SparkCore-Setup-1.0.1.exe
+- Instalador 1.0.2 foi gerado com sucesso em:
+  C:\Users\krist\AgendamentoWpfApp\artifacts\installer\SparkCore-Setup-1.0.2.exe
+- Publish usado pelo instalador:
+  C:\tmp\AgendamentoWpfApp-selfcontained-test
+- O instalador 1.0.2 empacota a pasta inteira do publish, incluindo assets do holograma WebView2/Three.js.
 - Icone SparkCore.ico aplicado no executavel e janelas principais.
 
 Entregas:
-- Atualizar versao para 1.0.1 ou 1.0.2 conforme proximo release.
-- Gerar novo instalador.
+- Atualizar versao para 1.0.2. FEITO
+- Gerar novo instalador. FEITO
 - Instalar por cima da versao anterior.
 - Validar icone no executavel.
 - Validar icone no atalho da Area de Trabalho.
 - Validar icone na barra de tarefas.
 - Validar icone no Alt-Tab.
+- Validar holograma 3D no app instalado.
 
 Criterio de aceite:
 - Usuario final ve SparkCore com icone correto em todos os pontos visuais do Windows.
@@ -901,15 +932,16 @@ Paleta desejada:
 - Preto.
 - Branco.
 
-Status em 05/07/2026:
-- Primeira passada da paleta aplicada em todo o sistema:
-  - Styles/Colors.xaml com a paleta oficial (ink #1C1713, bege #F6F1E7, laranja #E8720F, hover #C95E0C, soft #FCEBD9).
-  - Login (MainWindow) redesenhado: card flutuante com sombra, painel escuro com gradiente quente, logo e detalhes laranja, campos com foco laranja e cantos arredondados.
-  - CreateAccountWindow com a mesma identidade.
-  - DashboardWindow: header com logo SC laranja, sidebar bege, nav com indicador laranja no hover.
-  - Views (Clientes/Agenda/Profissionais/Laudos/Configuracoes): paineis com cantos 12px e fundos bege.
-  - Verde antigo removido do code-behind: SparkPalette.cs centraliza Success/Error para ViewModels e status.
-- Falta: revisar telas pequenas, DataGrid header/ComboBox com template proprio, validacao visual em maquina real.
+Status em 06/07/2026:
+- Design hi-fi oficial implementado a partir dos handoffs do claude.ai/design (projeto 3c909b9f):
+  - Login (MainWindow): painel de marca com imagem sparkcore-bg.png, glow pulsante, quadriculado com mascara, holograma 3D real via WebView2 + Three.js, campos com icones, olho mostra/oculta senha, "Esqueceu?" chamando /auth/recuperar-senha, botao gradiente com shimmer e rodape com status de conexao (GET /health).
+  - Holograma do login usa HTML local em Assets\login-hologram.html, servido no WebView2 por host virtual https://sparkcore.local/login-hologram.html para permitir carregamento local do GLB.
+  - Assets locais do holograma: three.js, GLTFLoader.js e LeePerrySmith.glb em Assets\hologram.
+  - CreateAccountWindow com o mesmo design system.
+  - DashboardWindow (handoff "SparkCore App"): header branco com logo raio+circulo tracejado e chip da API, sidebar escura 236px com icones, item ativo laranja com barra, badge EM BREVE em Servicos e rodape "Conectado · versao"; rodape geral com coracao.
+  - Views redesenhadas: cards 16px, tabelas DataGrid com pills de status coloridas (Ativo/Inativo/Agendada/Aguardando/Concluida/Cancelada), TIPO pill e check verde em Profissionais, calendario com dia selecionado em gradiente laranja, preview de folha timbrada em Laudos, Configuracoes com pill de sync e sub-card de backup com icones.
+  - Design system central em Styles/ (Colors/Typography/Controls): inputs 46px raio 11 com anel de foco laranja, ComboBox com template proprio, botoes primario gradiente/secundario/perigo, SparkDataGridStyle, SparkCalendarStyle.
+- Falta: revisar telas pequenas e validacao visual no app instalado; fontes Sora/Inter substituidas por Segoe UI (empacotar fontes e um passo futuro).
 
 Entregas:
 - Revisar Login.
