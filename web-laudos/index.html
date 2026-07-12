@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0f766e">
+  <title>Laudos Clinica Ideia</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="app-shell">
+    <section id="loginView" class="login-view">
+      <div class="brand-block">
+        <span class="brand-mark">CI</span>
+        <div>
+          <h1>Laudos</h1>
+          <p>Clinica Ideia</p>
+        </div>
+      </div>
+
+      <form id="loginForm" class="login-form" autocomplete="on">
+        <label for="email">E-mail</label>
+        <input id="email" name="email" type="email" autocomplete="email" required>
+
+        <label for="senha">Senha</label>
+        <input id="senha" name="senha" type="password" autocomplete="current-password" required>
+
+        <button type="submit" id="loginButton">Entrar</button>
+        <p id="loginMessage" class="message" role="status"></p>
+      </form>
+    </section>
+
+    <section id="portalView" class="portal-view is-hidden">
+      <header class="topbar">
+        <div>
+          <span class="eyebrow">Consulta</span>
+          <h1>Clientes</h1>
+        </div>
+        <button type="button" id="logoutButton" class="ghost-button">Sair</button>
+      </header>
+
+      <form id="searchForm" class="search-panel">
+        <div class="search-field">
+          <label for="nome">Nome</label>
+          <input id="nome" name="nome" type="search" placeholder="Nome do cliente">
+        </div>
+
+        <div class="search-field">
+          <label for="clienteId">ID</label>
+          <input id="clienteId" name="clienteId" type="search" placeholder="ID do cadastro">
+        </div>
+
+        <div class="search-field">
+          <label for="empresa">Empresa</label>
+          <input id="empresa" name="empresa" type="search" placeholder="Empresa">
+        </div>
+
+        <button type="submit" id="searchButton">Buscar</button>
+      </form>
+
+      <p id="portalMessage" class="message" role="status"></p>
+
+      <section id="results" class="results" aria-label="Resultados"></section>
+
+      <section id="detailPanel" class="detail-panel is-hidden" aria-label="Detalhe do cliente">
+        <div class="detail-header">
+          <div>
+            <span id="detailCompany" class="eyebrow"></span>
+            <h2 id="detailName"></h2>
+          </div>
+          <button type="button" id="closeDetailButton" class="ghost-button">Fechar</button>
+        </div>
+
+        <dl id="detailFields" class="detail-grid"></dl>
+
+        <h3>Historico</h3>
+        <div id="historyList" class="history-list"></div>
+      </section>
+    </section>
+  </main>
+
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

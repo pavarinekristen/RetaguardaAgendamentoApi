@@ -1,6 +1,6 @@
-﻿using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
-using MySql.Data.MySqlClient;
+using Npgsql;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -16,6 +16,7 @@ namespace RetaguardaAgendamentoAPI.Services.Sincronizacao
         private readonly string _adminConnectionString;
         private readonly string _retaguardaDatabase;
         private readonly string _operacionalDatabaseOverride;
+        private readonly bool _marcarAusentesComoExcluidos;
         private readonly ILogger<AgendaSnapshotService> _logger;
 
         private static readonly HashSet<string> TabelasIgnoradas = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
@@ -56,6 +57,14 @@ namespace RetaguardaAgendamentoAPI.Services.Sincronizacao
             ["HoraRegistro"] = "HORA_REGISTRO"
         };
 
+        private sealed class RegistroFinalPreparado
+        {
+            public string IdLocal { get; set; }
+            public string Hash { get; set; }
+            public string DadosJson { get; set; }
+            public Dictionary<string, object> Dados { get; set; }
+        }
+
         public AgendaSnapshotService(IConfiguration configuration, ILogger<AgendaSnapshotService> logger)
         {
             _adminConnectionString = configuration.GetConnectionString("AdminConnection")
@@ -68,9 +77,18 @@ namespace RetaguardaAgendamentoAPI.Services.Sincronizacao
 
             _operacionalDatabaseOverride = Environment.GetEnvironmentVariable("AGENDA_OPERACIONAL_DATABASE")
                 ?? configuration.GetValue<string>("AgendaOperacionalDatabase");
+
+            // Padrao conservador: snapshot incompleto nao deve esconder dados antigos.
+            // Para ativar soft-exclusao, configure Sincronizacao:MarcarAusentesComoExcluidos=true.
+            _marcarAusentesComoExcluidos = configuration.GetValue<bool?>("Sincronizacao:MarcarAusentesComoExcluidos") ?? false;
         }
 
+        // Identificador dinamico -> minusculo e com aspas (protege palavras reservadas e casa
+        // com o schema em minusculo). Usado para tabelas/colunas cujo nome vem do snapshot.
+        private static string Ident(string nome) => "\"" + (nome ?? string.Empty).ToLowerInvariant() + "\"";
 
+        // Nome de indice/constraint gerado a partir do nome da tabela (apenas [A-Z0-9_]).
+        private static string NomeObjeto(string nome) => (nome ?? string.Empty).ToLowerInvariant();
 
         public async Task<AgendaSnapshotResponse> SalvarSnapshotAsync(int empresaId, string cnpj, AgendaSnapshotRequest request)
         {
@@ -98,13 +116,13 @@ namespace RetaguardaAgendamentoAPI.Services.Sincronizacao
 
             var agora = DateTime.UtcNow;
 
-            await using var connection = new MySqlConnection(_adminConnectionString);
+            await using var connection = new NpgsqlConnection(_adminConnectionString);
             await connection.OpenAsync();
-            _logger.LogInformation("Conexao MySQL administrativa aberta para salvar snapshot. BancoOperacional={BancoOperacional}", operacionalDatabase);
+            _logger.LogInformation("Conexao Postgres administrativa aberta para salvar snapshot. BancoOperacional={BancoOperacional}", operacionalDatabase);
 
-            // Banco e tabelas de controle sao criados exclusivamente pelas migrations
-            // (mysql-migrations/001_baseline_schema.sql). Aqui apenas selecionamos o banco.
-            await ExecutarAsync(connection, $"USE `{operacionalDatabase}`");
+            // As tabelas de controle sao criadas pelas migrations (postgres-migrations/001_baseline_schema.sql).
+            // Aqui apenas apontamos o search_path para o schema operacional.
+            await ExecutarAsync(connection, $"SET search_path TO {operacionalDatabase}");
             await GarantirTabelasFinaisAsync(connection, tabelas);
 
             await using var transaction = await connection.BeginTransactionAsync();
@@ -112,7 +130,7 @@ namespace RetaguardaAgendamentoAPI.Services.Sincronizacao
             {
                 var execucaoId = await RegistrarExecucaoAsync(
                     connection,
-                    (MySqlTransaction)transaction,
+                    (NpgsqlTransaction)transaction,
                     empresaId,
                     cnpj,
                     dispositivoId,
@@ -121,56 +139,80 @@ namespace RetaguardaAgendamentoAPI.Services.Sincronizacao
 
                 foreach (var tabela in tabelas)
                 {
-                    var idsAtivos = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    var registrosPreparados = PrepararRegistrosFinais(tabela);
+                    var idsAtivos = registrosPreparados
+                        .Select(r => r.IdLocal)
+                        .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-                    foreach (var registro in tabela.Registros)
-                    {
-                        var idLocal = ValorOuPadrao(registro.IdLocal, registro.Hash, Guid.NewGuid().ToString("N"));
-                        idsAtivos.Add(idLocal);
-
-                        await RegistrarSnapshotAsync(
-                            connection,
-                            (MySqlTransaction)transaction,
-                            execucaoId,
-                            empresaId,
-                            tabela.Nome,
-                            idLocal,
-                            dispositivoId,
-                            registro,
-                            agora);
-
-                        await AplicarRegistroFinalAsync(
-                            connection,
-                            (MySqlTransaction)transaction,
-                            empresaId,
-                            dispositivoId,
-                            tabela.Nome,
-                            idLocal,
-                            registro,
-                            agora);
-
-                        await AplicarEmpresaAdministrativaAsync(
-                            connection,
-                            (MySqlTransaction)transaction,
-                            empresaId,
-                            tabela.Nome,
-                            registro);
-                    }
-
-                    await MarcarAusentesComoExcluidosAsync(
+                    await RegistrarSnapshotsBatchAsync(
                         connection,
-                        (MySqlTransaction)transaction,
+                        (NpgsqlTransaction)transaction,
+                        execucaoId,
+                        empresaId,
+                        tabela.Nome,
+                        dispositivoId,
+                        registrosPreparados,
+                        agora);
+
+                    await AplicarRegistrosFinaisBatchAsync(
+                        connection,
+                        (NpgsqlTransaction)transaction,
                         empresaId,
                         dispositivoId,
                         tabela.Nome,
-                        idsAtivos,
+                        registrosPreparados,
                         agora);
+
+                    await RegistrarAuditoriaBatchAsync(
+                        connection,
+                        (NpgsqlTransaction)transaction,
+                        empresaId,
+                        dispositivoId,
+                        tabela.Nome,
+                        registrosPreparados,
+                        agora);
+
+                    await RegistrarOutboxProcessadaBatchAsync(
+                        connection,
+                        (NpgsqlTransaction)transaction,
+                        empresaId,
+                        tabela.Nome,
+                        registrosPreparados,
+                        agora);
+
+                    if (tabela.Nome.Equals("EMPRESA", StringComparison.OrdinalIgnoreCase))
+                        foreach (var registro in registrosPreparados)
+                            await AplicarEmpresaAdministrativaAsync(
+                                connection,
+                                (NpgsqlTransaction)transaction,
+                                empresaId,
+                                tabela.Nome,
+                                registro.Dados);
+
+                    if (_marcarAusentesComoExcluidos)
+                    {
+                        await MarcarAusentesComoExcluidosAsync(
+                            connection,
+                            (NpgsqlTransaction)transaction,
+                            empresaId,
+                            dispositivoId,
+                            tabela.Nome,
+                            idsAtivos,
+                            agora);
+                    }
                 }
 
-                await using var finalizar = new MySqlCommand(
-                    "UPDATE AGENDA_SYNC_EXECUCAO SET FINALIZADO_EM = UTC_TIMESTAMP() WHERE ID = @id",
+                await RegistrarDispositivoAsync(
                     connection,
-                    (MySqlTransaction)transaction);
+                    (NpgsqlTransaction)transaction,
+                    empresaId,
+                    dispositivoId,
+                    agora);
+
+                await using var finalizar = new NpgsqlCommand(
+                    "UPDATE agenda_sync_execucao SET FINALIZADO_EM = (now() at time zone 'utc') WHERE ID = @id",
+                    connection,
+                    (NpgsqlTransaction)transaction);
                 finalizar.Parameters.AddWithValue("@id", execucaoId);
                 await finalizar.ExecuteNonQueryAsync();
 
@@ -199,20 +241,20 @@ namespace RetaguardaAgendamentoAPI.Services.Sincronizacao
         }
 
         private static async Task<long> RegistrarExecucaoAsync(
-            MySqlConnection connection,
-            MySqlTransaction transaction,
+            NpgsqlConnection connection,
+            NpgsqlTransaction transaction,
             int empresaId,
             string cnpj,
             string dispositivoId,
             IReadOnlyCollection<AgendaSnapshotTable> tabelas,
             DateTime agora)
         {
-            await using var exec = new MySqlCommand(@"
-                INSERT INTO AGENDA_SYNC_EXECUCAO
+            await using var exec = new NpgsqlCommand(@"
+                INSERT INTO agenda_sync_execucao
                     (ID_EMPRESA, CNPJ, DISPOSITIVO_ID, INICIADO_EM, TOTAL_TABELAS, TOTAL_REGISTROS)
                 VALUES
-                    (@empresaId, @cnpj, @dispositivo, @agora, @tabelas, @registros);
-                SELECT LAST_INSERT_ID();", connection, transaction);
+                    (@empresaId, @cnpj, @dispositivo, @agora, @tabelas, @registros)
+                RETURNING ID;", connection, transaction);
             exec.Parameters.AddWithValue("@empresaId", empresaId);
             exec.Parameters.AddWithValue("@cnpj", cnpj);
             exec.Parameters.AddWithValue("@dispositivo", dispositivoId);
@@ -222,39 +264,51 @@ namespace RetaguardaAgendamentoAPI.Services.Sincronizacao
             return Convert.ToInt64(await exec.ExecuteScalarAsync());
         }
 
-        private static async Task RegistrarSnapshotAsync(
-            MySqlConnection connection,
-            MySqlTransaction transaction,
+        private static async Task RegistrarSnapshotsBatchAsync(
+            NpgsqlConnection connection,
+            NpgsqlTransaction transaction,
             long execucaoId,
             int empresaId,
             string tabela,
-            string idLocal,
             string dispositivoId,
-            AgendaSnapshotRecord registro,
+            IReadOnlyList<RegistroFinalPreparado> registros,
             DateTime agora)
         {
-            await using var insert = new MySqlCommand(@"
-                INSERT INTO AGENDA_SYNC_REGISTRO
+            const int chunkSize = 500;
+            foreach (var chunk in Chunk(registros, chunkSize))
+            {
+                var valores = new List<string>(chunk.Count);
+                await using var insert = new NpgsqlCommand { Connection = connection, Transaction = transaction };
+
+                for (var i = 0; i < chunk.Count; i++)
+                {
+                    var prefix = i * 8;
+                    valores.Add($"(@p{prefix}, @p{prefix + 1}, @p{prefix + 2}, @p{prefix + 3}, @p{prefix + 4}, @p{prefix + 5}, @p{prefix + 6}, @p{prefix + 7})");
+                    insert.Parameters.AddWithValue($"@p{prefix}", execucaoId);
+                    insert.Parameters.AddWithValue($"@p{prefix + 1}", empresaId);
+                    insert.Parameters.AddWithValue($"@p{prefix + 2}", tabela);
+                    insert.Parameters.AddWithValue($"@p{prefix + 3}", chunk[i].IdLocal);
+                    insert.Parameters.AddWithValue($"@p{prefix + 4}", dispositivoId);
+                    insert.Parameters.AddWithValue($"@p{prefix + 5}", chunk[i].DadosJson);
+                    insert.Parameters.AddWithValue($"@p{prefix + 6}", chunk[i].Hash);
+                    insert.Parameters.AddWithValue($"@p{prefix + 7}", agora);
+                }
+
+                insert.CommandText = $@"
+                INSERT INTO agenda_sync_registro
                     (ID_EXECUCAO, ID_EMPRESA, TABELA, ID_LOCAL, DISPOSITIVO_ID, DADOS_JSON, HASH_SHA256, SINCRONIZADO_EM)
                 VALUES
-                    (@execucao, @empresaId, @tabela, @idLocal, @dispositivoId, @dados, @hash, @agora)
-                ON DUPLICATE KEY UPDATE
-                    ID_EXECUCAO = VALUES(ID_EXECUCAO),
-                    DADOS_JSON = VALUES(DADOS_JSON),
-                    HASH_SHA256 = VALUES(HASH_SHA256),
-                    SINCRONIZADO_EM = VALUES(SINCRONIZADO_EM)", connection, transaction);
-            insert.Parameters.AddWithValue("@execucao", execucaoId);
-            insert.Parameters.AddWithValue("@empresaId", empresaId);
-            insert.Parameters.AddWithValue("@tabela", tabela);
-            insert.Parameters.AddWithValue("@idLocal", idLocal);
-            insert.Parameters.AddWithValue("@dispositivoId", dispositivoId);
-            insert.Parameters.AddWithValue("@dados", registro.DadosJson ?? "{}");
-            insert.Parameters.AddWithValue("@hash", ValorOuPadrao(registro.Hash, string.Empty));
-            insert.Parameters.AddWithValue("@agora", agora);
-            await insert.ExecuteNonQueryAsync();
+                    {string.Join(", ", valores)}
+                ON CONFLICT (id_empresa, tabela, id_local, dispositivo_id) DO UPDATE SET
+                    ID_EXECUCAO = EXCLUDED.ID_EXECUCAO,
+                    DADOS_JSON = EXCLUDED.DADOS_JSON,
+                    HASH_SHA256 = EXCLUDED.HASH_SHA256,
+                    SINCRONIZADO_EM = EXCLUDED.SINCRONIZADO_EM";
+                await insert.ExecuteNonQueryAsync();
+            }
         }
 
-        private static async Task GarantirTabelasFinaisAsync(MySqlConnection connection, IEnumerable<AgendaSnapshotTable> tabelas)
+        private static async Task GarantirTabelasFinaisAsync(NpgsqlConnection connection, IEnumerable<AgendaSnapshotTable> tabelas)
         {
             var database = await ObterDatabaseAtualAsync(connection);
             foreach (var tabela in tabelas)
@@ -269,59 +323,66 @@ namespace RetaguardaAgendamentoAPI.Services.Sincronizacao
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .ToList();
 
+                var ukName = NomeObjeto($"UK_{tabela.Nome}_TENANT_LOCAL_DEVICE");
+                var ixName = NomeObjeto($"IX_{tabela.Nome}_EMPRESA");
+
                 if (!await TabelaExisteAsync(connection, database, tabela.Nome))
                 {
                     var colunasPayloadSql = colunas.Count == 0
                         ? string.Empty
-                        : string.Join(Environment.NewLine, colunas.Select(c => $"                        `{c}` LONGTEXT NULL,"));
+                        : string.Join(Environment.NewLine, colunas.Select(c => $"                        {Ident(c)} TEXT,"));
 
                     await ExecutarAsync(connection, $@"
-                    CREATE TABLE `{tabela.Nome}` (
-                        `ID` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-                        `ID_EMPRESA` INT UNSIGNED NOT NULL,
-                        `ID_LOCAL` VARCHAR(128) NOT NULL,
-                        `DISPOSITIVO_ID` VARCHAR(64) NOT NULL,
-                        `SINCRONIZADO_EM` DATETIME NOT NULL,
-                        `HASH_SHA256` VARCHAR(64) NULL,
-                        `DADOS_JSON` LONGTEXT NULL,
-                        `EXCLUIDO` CHAR(1) NOT NULL DEFAULT 'N',
+                    CREATE TABLE {Ident(tabela.Nome)} (
+                        ""id"" BIGSERIAL PRIMARY KEY,
+                        ""id_empresa"" INTEGER NOT NULL,
+                        ""id_local"" VARCHAR(128) NOT NULL,
+                        ""dispositivo_id"" VARCHAR(64) NOT NULL,
+                        ""sincronizado_em"" TIMESTAMP NOT NULL,
+                        ""hash_sha256"" VARCHAR(64),
+                        ""dados_json"" TEXT,
+                        ""excluido"" CHAR(1) NOT NULL DEFAULT 'N',
 {colunasPayloadSql}
-                        PRIMARY KEY (`ID`),
-                        UNIQUE KEY `UK_{tabela.Nome}_TENANT_LOCAL_DEVICE` (`ID_EMPRESA`, `ID_LOCAL`, `DISPOSITIVO_ID`),
-                        INDEX `IX_{tabela.Nome}_EMPRESA` (`ID_EMPRESA`)
-                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+                        CONSTRAINT {ukName} UNIQUE (""id_empresa"", ""id_local"", ""dispositivo_id"")
+                    )");
+
+                    await ExecutarAsync(connection, $"CREATE INDEX {ixName} ON {Ident(tabela.Nome)} (\"id_empresa\")");
                 }
                 else
                 {
-                    await GarantirColunaAsync(connection, tabela.Nome, "ID_EMPRESA", "INT UNSIGNED NOT NULL DEFAULT 0 AFTER ID");
-                    await GarantirColunaAsync(connection, tabela.Nome, "DISPOSITIVO_ID", "VARCHAR(64) NOT NULL DEFAULT 'AGENDA-WPF' AFTER ID_LOCAL");
-                    await GarantirColunaAsync(connection, tabela.Nome, "HASH_SHA256", "VARCHAR(64) NULL AFTER SINCRONIZADO_EM");
-                    await GarantirColunaAsync(connection, tabela.Nome, "DADOS_JSON", "LONGTEXT NULL AFTER HASH_SHA256");
-                    await GarantirColunaAsync(connection, tabela.Nome, "EXCLUIDO", "CHAR(1) NOT NULL DEFAULT 'N' AFTER DADOS_JSON");
-                    await GarantirIndiceAsync(connection, tabela.Nome, $"UK_{tabela.Nome}_TENANT_LOCAL_DEVICE", $"CREATE UNIQUE INDEX `UK_{tabela.Nome}_TENANT_LOCAL_DEVICE` ON `{tabela.Nome}` (`ID_EMPRESA`, `ID_LOCAL`, `DISPOSITIVO_ID`)");
-                    await GarantirIndiceAsync(connection, tabela.Nome, $"IX_{tabela.Nome}_EMPRESA", $"CREATE INDEX `IX_{tabela.Nome}_EMPRESA` ON `{tabela.Nome}` (`ID_EMPRESA`)");
+                    await GarantirColunaAsync(connection, tabela.Nome, "ID_EMPRESA", "INTEGER NOT NULL DEFAULT 0");
+                    await GarantirColunaAsync(connection, tabela.Nome, "DISPOSITIVO_ID", "VARCHAR(64) NOT NULL DEFAULT 'AGENDA-WPF'");
+                    await GarantirColunaAsync(connection, tabela.Nome, "HASH_SHA256", "VARCHAR(64)");
+                    await GarantirColunaAsync(connection, tabela.Nome, "DADOS_JSON", "TEXT");
+                    await GarantirColunaAsync(connection, tabela.Nome, "EXCLUIDO", "CHAR(1) NOT NULL DEFAULT 'N'");
+                    await GarantirIndiceAsync(connection, ukName, $"CREATE UNIQUE INDEX {ukName} ON {Ident(tabela.Nome)} (\"id_empresa\", \"id_local\", \"dispositivo_id\")");
+                    await GarantirIndiceAsync(connection, ixName, $"CREATE INDEX {ixName} ON {Ident(tabela.Nome)} (\"id_empresa\")");
 
                     foreach (var coluna in colunas)
-                        await GarantirColunaAsync(connection, tabela.Nome, coluna, "LONGTEXT NULL");
+                        await GarantirColunaAsync(connection, tabela.Nome, coluna, "TEXT");
                 }
+
+                await GarantirIndicesOperacionaisAsync(connection, tabela.Nome, colunas);
             }
         }
 
-        private static async Task AplicarRegistroFinalAsync(
-            MySqlConnection connection,
-            MySqlTransaction transaction,
+        private static async Task AplicarRegistrosFinaisBatchAsync(
+            NpgsqlConnection connection,
+            NpgsqlTransaction transaction,
             int empresaId,
             string dispositivoId,
             string nomeTabela,
-            string idLocal,
-            AgendaSnapshotRecord registro,
+            IReadOnlyList<RegistroFinalPreparado> registros,
             DateTime agora)
         {
             if (nomeTabela.StartsWith("AGENDA_SYNC_", StringComparison.OrdinalIgnoreCase))
                 return;
 
-            var dados = LerDados(registro.DadosJson);
-            var colunas = dados.Keys
+            if (registros.Count == 0)
+                return;
+
+            var colunas = registros
+                .SelectMany(r => r.Dados.Keys)
                 .Select(NormalizarNomeColuna)
                 .Where(c => !string.IsNullOrWhiteSpace(c))
                 .Where(c => !EhColunaReservada(c))
@@ -340,46 +401,46 @@ namespace RetaguardaAgendamentoAPI.Services.Sincronizacao
             };
             nomesColunas.AddRange(colunas);
 
-            var parametros = nomesColunas.Select((_, index) => $"@p{index}").ToList();
             var atualizacoes = nomesColunas
                 .Where(c => !c.Equals("ID_EMPRESA", StringComparison.OrdinalIgnoreCase))
                 .Where(c => !c.Equals("ID_LOCAL", StringComparison.OrdinalIgnoreCase))
                 .Where(c => !c.Equals("DISPOSITIVO_ID", StringComparison.OrdinalIgnoreCase))
-                .Select(c => $"`{c}` = VALUES(`{c}`)");
+                .Select(c => $"{Ident(c)} = EXCLUDED.{Ident(c)}");
 
-            var sql = $@"
-                INSERT INTO `{nomeTabela}`
-                    ({string.Join(", ", nomesColunas.Select(c => $"`{c}`"))})
-                VALUES
-                    ({string.Join(", ", parametros)})
-                ON DUPLICATE KEY UPDATE
-                    {string.Join(", ", atualizacoes)}";
-
-            await using var command = new MySqlCommand(sql, connection, transaction);
-            command.Parameters.AddWithValue("@p0", empresaId);
-            command.Parameters.AddWithValue("@p1", idLocal);
-            command.Parameters.AddWithValue("@p2", dispositivoId);
-            command.Parameters.AddWithValue("@p3", agora);
-            command.Parameters.AddWithValue("@p4", ValorOuPadrao(registro.Hash, string.Empty));
-            command.Parameters.AddWithValue("@p5", registro.DadosJson ?? "{}");
-            command.Parameters.AddWithValue("@p6", "N");
-
-            for (var i = 0; i < colunas.Count; i++)
+            var chunkSize = Math.Max(25, Math.Min(300, 60000 / Math.Max(1, nomesColunas.Count)));
+            foreach (var chunk in Chunk(registros, chunkSize))
             {
-                var colunaOriginal = dados.Keys.First(k => NormalizarNomeColuna(k).Equals(colunas[i], StringComparison.OrdinalIgnoreCase));
-                command.Parameters.AddWithValue($"@p{i + 7}", ConverterValorFinal(colunaOriginal, dados[colunaOriginal]));
+                var values = new List<string>(chunk.Count);
+                await using var command = new NpgsqlCommand { Connection = connection, Transaction = transaction };
+
+                for (var row = 0; row < chunk.Count; row++)
+                {
+                    var parametros = new List<string>(nomesColunas.Count);
+                    for (var col = 0; col < nomesColunas.Count; col++)
+                    {
+                        var paramName = $"@p{row}_{col}";
+                        parametros.Add(paramName);
+                        command.Parameters.AddWithValue(paramName, ValorColunaFinal(nomesColunas[col], chunk[row], empresaId, dispositivoId, agora));
+                    }
+
+                    values.Add($"({string.Join(", ", parametros)})");
+                }
+
+                command.CommandText = $@"
+                    INSERT INTO {Ident(nomeTabela)}
+                        ({string.Join(", ", nomesColunas.Select(Ident))})
+                    VALUES
+                        {string.Join(", ", values)}
+                    ON CONFLICT (""id_empresa"", ""id_local"", ""dispositivo_id"") DO UPDATE SET
+                        {string.Join(", ", atualizacoes)}";
+
+                await command.ExecuteNonQueryAsync();
             }
-
-            await command.ExecuteNonQueryAsync();
-
-            await RegistrarAuditoriaAsync(connection, transaction, empresaId, dispositivoId, nomeTabela, idLocal, "UPSERT", registro.DadosJson, agora);
-            await RegistrarOutboxProcessadaAsync(connection, transaction, empresaId, nomeTabela, idLocal, registro.DadosJson, agora);
-            await RegistrarDispositivoAsync(connection, transaction, empresaId, dispositivoId, agora);
         }
 
         private static async Task MarcarAusentesComoExcluidosAsync(
-            MySqlConnection connection,
-            MySqlTransaction transaction,
+            NpgsqlConnection connection,
+            NpgsqlTransaction transaction,
             int empresaId,
             string dispositivoId,
             string nomeTabela,
@@ -395,14 +456,14 @@ namespace RetaguardaAgendamentoAPI.Services.Sincronizacao
                 : $"AND ID_LOCAL NOT IN ({string.Join(", ", parametros)})";
 
             var sql = $@"
-                UPDATE `{nomeTabela}`
+                UPDATE {Ident(nomeTabela)}
                    SET EXCLUIDO = 'S',
                        SINCRONIZADO_EM = @agora
                  WHERE ID_EMPRESA = @empresaId
                    AND DISPOSITIVO_ID = @dispositivoId
                    {filtroIds}";
 
-            await using var command = new MySqlCommand(sql, connection, transaction);
+            await using var command = new NpgsqlCommand(sql, connection, transaction);
             command.Parameters.AddWithValue("@agora", agora);
             command.Parameters.AddWithValue("@empresaId", empresaId);
             command.Parameters.AddWithValue("@dispositivoId", dispositivoId);
@@ -415,11 +476,11 @@ namespace RetaguardaAgendamentoAPI.Services.Sincronizacao
         }
 
         private async Task AplicarEmpresaAdministrativaAsync(
-            MySqlConnection connection,
-            MySqlTransaction transaction,
+            NpgsqlConnection connection,
+            NpgsqlTransaction transaction,
             int empresaId,
             string nomeTabela,
-            AgendaSnapshotRecord registro)
+            Dictionary<string, object> dados)
         {
             if (!nomeTabela.Equals("EMPRESA", StringComparison.OrdinalIgnoreCase))
                 return;
@@ -427,7 +488,6 @@ namespace RetaguardaAgendamentoAPI.Services.Sincronizacao
             if (!await TabelaExisteAsync(connection, _retaguardaDatabase, "EMPRESA"))
                 return;
 
-            var dados = LerDados(registro.DadosJson);
             var colunasExistentes = await ListarColunasAsync(connection, _retaguardaDatabase, "EMPRESA");
             var pares = EmpresaColunas
                 .Where(p => dados.ContainsKey(p.Key))
@@ -438,9 +498,9 @@ namespace RetaguardaAgendamentoAPI.Services.Sincronizacao
             if (pares.Count == 0)
                 return;
 
-            var set = string.Join(", ", pares.Select((p, index) => $"`{p.Value}` = @p{index}"));
-            await using var update = new MySqlCommand(
-                $"UPDATE `{_retaguardaDatabase}`.`EMPRESA` SET {set} WHERE ID = @id",
+            var set = string.Join(", ", pares.Select((p, index) => $"{Ident(p.Value)} = @p{index}"));
+            await using var update = new NpgsqlCommand(
+                $"UPDATE {_retaguardaDatabase}.empresa SET {set} WHERE ID = @id",
                 connection,
                 transaction);
 
@@ -451,68 +511,98 @@ namespace RetaguardaAgendamentoAPI.Services.Sincronizacao
             await update.ExecuteNonQueryAsync();
         }
 
-        private static async Task RegistrarAuditoriaAsync(
-            MySqlConnection connection,
-            MySqlTransaction transaction,
+        private static async Task RegistrarAuditoriaBatchAsync(
+            NpgsqlConnection connection,
+            NpgsqlTransaction transaction,
             int empresaId,
             string dispositivoId,
             string tabela,
-            string idLocal,
-            string acao,
-            string dadosJson,
+            IReadOnlyList<RegistroFinalPreparado> registros,
             DateTime agora)
         {
-            await using var command = new MySqlCommand(@"
-                INSERT INTO AGENDA_AUDITORIA_OPERACIONAL
+            if (registros.Count == 0)
+                return;
+
+            const int chunkSize = 500;
+            foreach (var chunk in Chunk(registros, chunkSize))
+            {
+                var valores = new List<string>(chunk.Count);
+                await using var command = new NpgsqlCommand { Connection = connection, Transaction = transaction };
+
+                for (var i = 0; i < chunk.Count; i++)
+                {
+                    var prefix = i * 7;
+                    valores.Add($"(@p{prefix}, @p{prefix + 1}, @p{prefix + 2}, @p{prefix + 3}, @p{prefix + 4}, @p{prefix + 5}, @p{prefix + 6})");
+                    command.Parameters.AddWithValue($"@p{prefix}", empresaId);
+                    command.Parameters.AddWithValue($"@p{prefix + 1}", tabela);
+                    command.Parameters.AddWithValue($"@p{prefix + 2}", chunk[i].IdLocal);
+                    command.Parameters.AddWithValue($"@p{prefix + 3}", dispositivoId);
+                    command.Parameters.AddWithValue($"@p{prefix + 4}", "UPSERT");
+                    command.Parameters.AddWithValue($"@p{prefix + 5}", chunk[i].DadosJson);
+                    command.Parameters.AddWithValue($"@p{prefix + 6}", agora);
+                }
+
+                command.CommandText = $@"
+                INSERT INTO agenda_auditoria_operacional
                     (ID_EMPRESA, TABELA, ID_LOCAL, DISPOSITIVO_ID, ACAO, DADOS_JSON, CRIADO_EM)
                 VALUES
-                    (@empresaId, @tabela, @idLocal, @dispositivoId, @acao, @dadosJson, @agora)", connection, transaction);
-            command.Parameters.AddWithValue("@empresaId", empresaId);
-            command.Parameters.AddWithValue("@tabela", tabela);
-            command.Parameters.AddWithValue("@idLocal", idLocal);
-            command.Parameters.AddWithValue("@dispositivoId", dispositivoId);
-            command.Parameters.AddWithValue("@acao", acao);
-            command.Parameters.AddWithValue("@dadosJson", dadosJson ?? "{}");
-            command.Parameters.AddWithValue("@agora", agora);
-            await command.ExecuteNonQueryAsync();
+                    {string.Join(", ", valores)}";
+                await command.ExecuteNonQueryAsync();
+            }
         }
 
-        private static async Task RegistrarOutboxProcessadaAsync(
-            MySqlConnection connection,
-            MySqlTransaction transaction,
+        private static async Task RegistrarOutboxProcessadaBatchAsync(
+            NpgsqlConnection connection,
+            NpgsqlTransaction transaction,
             int empresaId,
             string tabela,
-            string idLocal,
-            string dadosJson,
+            IReadOnlyList<RegistroFinalPreparado> registros,
             DateTime agora)
         {
-            await using var command = new MySqlCommand(@"
-                INSERT INTO INTEGRACAO_OUTBOX
+            if (registros.Count == 0)
+                return;
+
+            const int chunkSize = 500;
+            foreach (var chunk in Chunk(registros, chunkSize))
+            {
+                var valores = new List<string>(chunk.Count);
+                await using var command = new NpgsqlCommand { Connection = connection, Transaction = transaction };
+
+                for (var i = 0; i < chunk.Count; i++)
+                {
+                    var prefix = i * 6;
+                    valores.Add($"(@p{prefix}, 'AGENDA', @p{prefix + 1}, @p{prefix + 2}, @p{prefix + 3}, 'PROCESSADO', @p{prefix + 4}, @p{prefix + 5})");
+                    command.Parameters.AddWithValue($"@p{prefix}", empresaId);
+                    command.Parameters.AddWithValue($"@p{prefix + 1}", tabela);
+                    command.Parameters.AddWithValue($"@p{prefix + 2}", chunk[i].IdLocal);
+                    command.Parameters.AddWithValue($"@p{prefix + 3}", chunk[i].DadosJson);
+                    command.Parameters.AddWithValue($"@p{prefix + 4}", agora);
+                    command.Parameters.AddWithValue($"@p{prefix + 5}", agora);
+                }
+
+                command.CommandText = $@"
+                INSERT INTO integracao_outbox
                     (ID_EMPRESA, ORIGEM, ENTIDADE, ID_LOCAL, PAYLOAD_JSON, STATUS, CRIADO_EM, PROCESSADO_EM)
                 VALUES
-                    (@empresaId, 'AGENDA', @entidade, @idLocal, @payload, 'PROCESSADO', @agora, @agora)", connection, transaction);
-            command.Parameters.AddWithValue("@empresaId", empresaId);
-            command.Parameters.AddWithValue("@entidade", tabela);
-            command.Parameters.AddWithValue("@idLocal", idLocal);
-            command.Parameters.AddWithValue("@payload", dadosJson ?? "{}");
-            command.Parameters.AddWithValue("@agora", agora);
-            await command.ExecuteNonQueryAsync();
+                    {string.Join(", ", valores)}";
+                await command.ExecuteNonQueryAsync();
+            }
         }
 
         private static async Task RegistrarDispositivoAsync(
-            MySqlConnection connection,
-            MySqlTransaction transaction,
+            NpgsqlConnection connection,
+            NpgsqlTransaction transaction,
             int empresaId,
             string dispositivoId,
             DateTime agora)
         {
-            await using var command = new MySqlCommand(@"
-                INSERT INTO AGENDA_DISPOSITIVO
+            await using var command = new NpgsqlCommand(@"
+                INSERT INTO agenda_dispositivo
                     (ID_EMPRESA, DISPOSITIVO_ID, NOME, ULTIMA_SINCRONIZACAO_EM, ATIVO)
                 VALUES
                     (@empresaId, @dispositivoId, @dispositivoId, @agora, 'S')
-                ON DUPLICATE KEY UPDATE
-                    ULTIMA_SINCRONIZACAO_EM = VALUES(ULTIMA_SINCRONIZACAO_EM),
+                ON CONFLICT (id_empresa, dispositivo_id) DO UPDATE SET
+                    ULTIMA_SINCRONIZACAO_EM = EXCLUDED.ULTIMA_SINCRONIZACAO_EM,
                     ATIVO = 'S'", connection, transaction);
             command.Parameters.AddWithValue("@empresaId", empresaId);
             command.Parameters.AddWithValue("@dispositivoId", dispositivoId);
@@ -520,36 +610,36 @@ namespace RetaguardaAgendamentoAPI.Services.Sincronizacao
             await command.ExecuteNonQueryAsync();
         }
 
-        private static async Task<bool> TabelaExisteAsync(MySqlConnection connection, string database, string tabela)
+        private static async Task<bool> TabelaExisteAsync(NpgsqlConnection connection, string database, string tabela)
         {
-            await using var command = new MySqlCommand(@"
+            await using var command = new NpgsqlCommand(@"
                 SELECT COUNT(*)
                   FROM INFORMATION_SCHEMA.TABLES
                  WHERE TABLE_SCHEMA = @database
-                   AND TABLE_NAME = @tabela", connection);
+                   AND LOWER(TABLE_NAME) = LOWER(@tabela)", connection);
             command.Parameters.AddWithValue("@database", database);
             command.Parameters.AddWithValue("@tabela", tabela);
             return Convert.ToInt32(await command.ExecuteScalarAsync()) > 0;
         }
 
-        private static async Task<string> ObterDatabaseAtualAsync(MySqlConnection connection)
+        private static async Task<string> ObterDatabaseAtualAsync(NpgsqlConnection connection)
         {
-            await using var command = new MySqlCommand("SELECT DATABASE()", connection);
+            await using var command = new NpgsqlCommand("SELECT current_schema()", connection);
             var database = Convert.ToString(await command.ExecuteScalarAsync());
             if (string.IsNullOrWhiteSpace(database))
-                throw new InvalidOperationException("Nenhum database selecionado para sincronizacao da agenda.");
+                throw new InvalidOperationException("Nenhum schema selecionado para sincronizacao da agenda.");
 
             return database;
         }
 
-        private static async Task<HashSet<string>> ListarColunasAsync(MySqlConnection connection, string database, string tabela)
+        private static async Task<HashSet<string>> ListarColunasAsync(NpgsqlConnection connection, string database, string tabela)
         {
             var colunas = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            await using var command = new MySqlCommand(@"
+            await using var command = new NpgsqlCommand(@"
                 SELECT COLUMN_NAME
                   FROM INFORMATION_SCHEMA.COLUMNS
                  WHERE TABLE_SCHEMA = @database
-                   AND TABLE_NAME = @tabela", connection);
+                   AND LOWER(TABLE_NAME) = LOWER(@tabela)", connection);
             command.Parameters.AddWithValue("@database", database);
             command.Parameters.AddWithValue("@tabela", tabela);
 
@@ -560,38 +650,80 @@ namespace RetaguardaAgendamentoAPI.Services.Sincronizacao
             return colunas;
         }
 
-        private static async Task GarantirColunaAsync(MySqlConnection connection, string tabela, string coluna, string definicao)
+        private static async Task GarantirColunaAsync(NpgsqlConnection connection, string tabela, string coluna, string definicao)
         {
             if (!await ColunaExisteAsync(connection, tabela, coluna))
-                await ExecutarAsync(connection, $"ALTER TABLE `{tabela}` ADD COLUMN `{coluna}` {definicao}");
+                await ExecutarAsync(connection, $"ALTER TABLE {Ident(tabela)} ADD COLUMN {Ident(coluna)} {definicao}");
         }
 
-        private static async Task<bool> ColunaExisteAsync(MySqlConnection connection, string tabela, string coluna)
+        private static async Task<bool> ColunaExisteAsync(NpgsqlConnection connection, string tabela, string coluna)
         {
-            await using var command = new MySqlCommand(@"
+            await using var command = new NpgsqlCommand(@"
                 SELECT COUNT(*)
                   FROM INFORMATION_SCHEMA.COLUMNS
-                 WHERE TABLE_SCHEMA = DATABASE()
-                   AND TABLE_NAME = @tabela
-                   AND COLUMN_NAME = @coluna", connection);
+                 WHERE TABLE_SCHEMA = current_schema()
+                   AND LOWER(TABLE_NAME) = LOWER(@tabela)
+                   AND LOWER(COLUMN_NAME) = LOWER(@coluna)", connection);
             command.Parameters.AddWithValue("@tabela", tabela);
             command.Parameters.AddWithValue("@coluna", coluna);
             return Convert.ToInt32(await command.ExecuteScalarAsync()) > 0;
         }
 
-        private static async Task GarantirIndiceAsync(MySqlConnection connection, string tabela, string indice, string createSql)
+        private static async Task GarantirIndiceAsync(NpgsqlConnection connection, string indice, string createSql)
         {
-            await using var command = new MySqlCommand(@"
+            await using var command = new NpgsqlCommand(@"
                 SELECT COUNT(*)
-                  FROM INFORMATION_SCHEMA.STATISTICS
-                 WHERE TABLE_SCHEMA = DATABASE()
-                   AND TABLE_NAME = @tabela
-                   AND INDEX_NAME = @indice", connection);
-            command.Parameters.AddWithValue("@tabela", tabela);
+                  FROM pg_indexes
+                 WHERE schemaname = current_schema()
+                   AND LOWER(indexname) = LOWER(@indice)", connection);
             command.Parameters.AddWithValue("@indice", indice);
 
             if (Convert.ToInt32(await command.ExecuteScalarAsync()) == 0)
                 await ExecutarAsync(connection, createSql);
+        }
+
+        private static async Task GarantirIndicesOperacionaisAsync(NpgsqlConnection connection, string tabela, IReadOnlyCollection<string> colunas)
+        {
+            if (tabela.StartsWith("AGENDA_SYNC_", StringComparison.OrdinalIgnoreCase))
+                return;
+
+            await GarantirIndiceAsync(
+                connection,
+                NomeObjeto($"IX_{tabela}_EMPRESA_DEVICE_LOCAL"),
+                $"CREATE INDEX {NomeObjeto($"IX_{tabela}_EMPRESA_DEVICE_LOCAL")} ON {Ident(tabela)} (\"id_empresa\", \"dispositivo_id\", \"id_local\")");
+
+            await GarantirIndiceAsync(
+                connection,
+                NomeObjeto($"IX_{tabela}_EMPRESA_ATIVOS_SYNC"),
+                $"CREATE INDEX {NomeObjeto($"IX_{tabela}_EMPRESA_ATIVOS_SYNC")} ON {Ident(tabela)} (\"id_empresa\", \"sincronizado_em\" DESC) WHERE \"excluido\" <> 'S'");
+
+            if (colunas.Contains("NOME", StringComparer.OrdinalIgnoreCase))
+                await GarantirIndiceAsync(
+                    connection,
+                    NomeObjeto($"IX_{tabela}_EMPRESA_NOME_ATIVOS"),
+                    $"CREATE INDEX {NomeObjeto($"IX_{tabela}_EMPRESA_NOME_ATIVOS")} ON {Ident(tabela)} (\"id_empresa\", \"nome\") WHERE \"excluido\" <> 'S'");
+
+            if (!await ExtensaoExisteAsync(connection, "pg_trgm"))
+                return;
+
+            foreach (var coluna in new[] { "NOME", "EMPRESA", "ID_TEXTO", "CODIGO" })
+            {
+                if (!colunas.Contains(coluna, StringComparer.OrdinalIgnoreCase))
+                    continue;
+
+                var indice = NomeObjeto($"IX_{tabela}_{coluna}_TRGM");
+                await GarantirIndiceAsync(
+                    connection,
+                    indice,
+                    $"CREATE INDEX {indice} ON {Ident(tabela)} USING gin (lower(coalesce({Ident(coluna)}, '')) gin_trgm_ops)");
+            }
+        }
+
+        private static async Task<bool> ExtensaoExisteAsync(NpgsqlConnection connection, string nome)
+        {
+            await using var command = new NpgsqlCommand("SELECT COUNT(*) FROM pg_extension WHERE extname = @nome", connection);
+            command.Parameters.AddWithValue("@nome", nome);
+            return Convert.ToInt32(await command.ExecuteScalarAsync()) > 0;
         }
 
         private static IReadOnlyList<string> ExtrairColunas(AgendaSnapshotTable tabela)
@@ -620,6 +752,49 @@ namespace RetaguardaAgendamentoAPI.Services.Sincronizacao
                 dados[property.Name] = ConverterValorJson(property.Value);
 
             return dados;
+        }
+
+        private static IReadOnlyList<RegistroFinalPreparado> PrepararRegistrosFinais(AgendaSnapshotTable tabela)
+        {
+            var registros = new List<RegistroFinalPreparado>(tabela.Registros.Count);
+            foreach (var registro in tabela.Registros)
+            {
+                registros.Add(new RegistroFinalPreparado
+                {
+                    IdLocal = ValorOuPadrao(registro.IdLocal, registro.Hash, Guid.NewGuid().ToString("N")),
+                    Hash = ValorOuPadrao(registro.Hash, string.Empty),
+                    DadosJson = registro.DadosJson ?? "{}",
+                    Dados = LerDados(registro.DadosJson)
+                });
+            }
+
+            return registros;
+        }
+
+        private static object ValorColunaFinal(
+            string coluna,
+            RegistroFinalPreparado registro,
+            int empresaId,
+            string dispositivoId,
+            DateTime agora)
+        {
+            if (coluna.Equals("ID_EMPRESA", StringComparison.OrdinalIgnoreCase))
+                return empresaId;
+            if (coluna.Equals("ID_LOCAL", StringComparison.OrdinalIgnoreCase))
+                return registro.IdLocal;
+            if (coluna.Equals("DISPOSITIVO_ID", StringComparison.OrdinalIgnoreCase))
+                return dispositivoId;
+            if (coluna.Equals("SINCRONIZADO_EM", StringComparison.OrdinalIgnoreCase))
+                return agora;
+            if (coluna.Equals("HASH_SHA256", StringComparison.OrdinalIgnoreCase))
+                return registro.Hash;
+            if (coluna.Equals("DADOS_JSON", StringComparison.OrdinalIgnoreCase))
+                return registro.DadosJson;
+            if (coluna.Equals("EXCLUIDO", StringComparison.OrdinalIgnoreCase))
+                return "N";
+
+            var chave = registro.Dados.Keys.FirstOrDefault(k => NormalizarNomeColuna(k).Equals(coluna, StringComparison.OrdinalIgnoreCase));
+            return chave == null ? DBNull.Value : ConverterValorFinal(chave, registro.Dados[chave]);
         }
 
         private static object ConverterValorJson(JsonElement value)
@@ -661,8 +836,8 @@ namespace RetaguardaAgendamentoAPI.Services.Sincronizacao
             if (string.IsNullOrWhiteSpace(connectionString))
                 return null;
 
-            var builder = new MySqlConnectionStringBuilder(connectionString);
-            return string.IsNullOrWhiteSpace(builder.Database) ? null : builder.Database;
+            var builder = new NpgsqlConnectionStringBuilder(connectionString);
+            return string.IsNullOrWhiteSpace(builder.SearchPath) ? null : builder.SearchPath;
         }
 
         private string NomeBancoOperacional()
@@ -680,9 +855,9 @@ namespace RetaguardaAgendamentoAPI.Services.Sincronizacao
             return string.IsNullOrWhiteSpace(normalizado) ? "agenda_operacional" : normalizado;
         }
 
-        private static async Task ExecutarAsync(MySqlConnection connection, string sql)
+        private static async Task ExecutarAsync(NpgsqlConnection connection, string sql)
         {
-            await using var command = new MySqlCommand(sql, connection);
+            await using var command = new NpgsqlCommand(sql, connection);
             await command.ExecuteNonQueryAsync();
         }
 
@@ -754,7 +929,21 @@ namespace RetaguardaAgendamentoAPI.Services.Sincronizacao
 
             return string.Empty;
         }
+
+        private static List<T> Chunk<T>(IReadOnlyList<T> items, int size, int offset)
+        {
+            var count = Math.Min(size, items.Count - offset);
+            var chunk = new List<T>(count);
+            for (var i = 0; i < count; i++)
+                chunk.Add(items[offset + i]);
+
+            return chunk;
+        }
+
+        private static IEnumerable<List<T>> Chunk<T>(IReadOnlyList<T> items, int size)
+        {
+            for (var offset = 0; offset < items.Count; offset += size)
+                yield return Chunk(items, size, offset);
+        }
     }
 }
-
-

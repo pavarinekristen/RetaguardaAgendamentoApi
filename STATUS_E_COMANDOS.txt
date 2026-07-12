@@ -384,7 +384,13 @@ Criterio de aceite:
 - Apos logout, token retorna 401 em /auth/me; job loga volume expurgado.
 
 TASK API-INFRA 7 - PREPARACAO PARA REVERSE PROXY (OBRIGATORIA ANTES DO DEPLOY)
-Entregas:
+STATUS: FEITA EM 10/07/2026
+- UseForwardedHeaders (X-Forwarded-For/Proto) configuravel por ForwardedHeaders:Enabled/KnownProxies/KnownNetworks, aplicado ANTES do rate limiter no Startup. So aceita header de proxy confiavel.
+- /health com rate limit proprio (RateLimiting:Health) e cache do check Postgres (Health:DatabaseCacheSeconds, padrao 5s).
+- appsettings.Production.json criado: ForwardedHeaders habilitado, CORS so laudos.clinicaideia.com.br, ReturnConfirmationCodeInResponse=false, connection strings vazias (obriga configurar via variaveis de ambiente).
+- Pacote de deploy criado em deploy/: DEPLOY_LINODE.md (guia completo), sparkcore-api.service, sparkcore-api.env.example, nginx conf (client_max_body_size 50m para o snapshot), docker-compose.postgres.prod.yml (porta so em 127.0.0.1) e apply-postgres-migrations.sh.
+- Testes de integracao portados de Testcontainers.MySql para Testcontainers.PostgreSql (estavam quebrados desde o porte para Postgres). dotnet test em 10/07/2026: 119/119 aprovados.
+Entregas originais:
 - UseForwardedHeaders (X-Forwarded-For/Proto) com KnownProxies/KnownNetworks por config, ANTES do rate limiter no pipeline.
 - Sem isso, atras de Nginx/IIS o rate limit por IP enxerga so o IP do proxy.
 - Rate limit proprio em /health + cache do check MySQL por ~5s (hoje /health abre conexao a cada chamada, sem limite).
@@ -1207,3 +1213,583 @@ Regras:
   git pull
   git switch -c feat/nome-da-task
 - Depois que a feature entrar na developer e for homologada, a feat/ pode ser apagada.
+
+
+18. TASKS CLIENTE - ALTERACOES DE AGENDAMENTO, CLIENTES, LAUDOS E RELATORIOS
+
+Origem:
+- Reuniao com cliente em 06/07/2026, consolidada em 07/07/2026.
+
+Objetivo:
+- Ajustar o SparkCore para o fluxo real de laudos de funcionarios, separando laudo com arma e sem arma, melhorando cadastro de cliente/funcionario, historico, status e relatorios.
+
+Premissas confirmadas:
+- "Cliente" no sistema representa a pessoa/funcionario atendido.
+- O funcionario pode trabalhar armado ou sem arma.
+- Existem dois laudos oficiais diferentes:
+  - pagina 1 do PDF oficial: laudo sem arma;
+  - pagina 2 do PDF oficial: laudo com arma.
+- O PDF oficial esta em Downloads e precisa ser localizado/copied para o projeto antes da implementacao final de download.
+- "Baixar laudo" deve ser download/geracao do PDF correto, nao apenas baixa de status.
+- Motivo nao sera texto livre; sera lista fixa/cadastrada. Exemplos iniciais: Admissao, Periodico, Retorno ao trabalho, Mudanca de funcao, Demissional. Lista final depende de confirmacao do cliente.
+
+TASK CLIENTE 1 - REGISTRAR TASKS NO STATUS_E_COMANDOS.txt
+Status: FEITO em 07/07/2026.
+Entregas:
+- Registrar todas as tasks desta reuniao no arquivo oficial de status do projeto.
+- Deixar claro o status inicial e a ordem recomendada.
+
+TASK CLIENTE 2 - AJUSTAR CADASTRO DE CLIENTE/FUNCIONARIO
+Status: FEITO no WPF em 07/07/2026.
+Entregas:
+- Mostrar ID no cadastro/listagem. FEITO no WPF.
+- Vincular cliente/funcionario a uma empresa. FEITO no WPF.
+- Criar filtro por empresa. FEITO: ComboBox dedicado no cadastro + busca textual por empresa/cargo.
+- Adicionar campos. FEITO no modelo/formulario WPF:
+  - escolaridade;
+  - cargo;
+  - estado civil;
+  - naturalidade;
+  - email;
+  - CPF;
+  - RG;
+  - sexo masculino/feminino;
+  - tipo de endereco: particular ou empresa;
+  - endereco completo.
+- Validar campos principais: nome, empresa, CPF quando informado, cargo e email quando informado.
+  - validacao de nome, empresa, cargo, CPF e email aplicada no WPF.
+- Ajuste UX em 07/07/2026:
+  - tela "Cadastro" ficou somente para cadastro/edicao do funcionario, em formulario amplo;
+  - criada sessao/aba "Pesquisa" separada com filtros, tabela grande, detalhe do funcionario e botao "Editar cadastro".
+Criterio de aceite:
+- Usuario consegue cadastrar e editar funcionario com todos os dados solicitados e filtrar por empresa.
+
+TASK CLIENTE 3 - CRIAR/CONFIGURAR MOTIVOS DE AGENDAMENTO/LAUDO
+Status: PARCIAL em 07/07/2026.
+Entregas:
+- Criar lista fixa inicial de motivos. FEITO no WPF: Admissao, Periodico, Retorno ao trabalho, Mudanca de funcao, Demissional.
+- Usar ComboBox/selecionador no agendamento. FEITO no WPF.
+- Evitar motivo como texto livre. FEITO no WPF.
+- Preparar estrutura para atualizar a lista quando o cliente confirmar os motivos oficiais.
+Criterio de aceite:
+- Agendamento so aceita motivo vindo da lista definida.
+
+TASK CLIENTE 4 - AJUSTAR TELA E MODELO DE AGENDAMENTO
+Status: PARCIAL em 07/07/2026.
+Entregas:
+- Confirmar/adicionar campos no WPF:
+  - data;
+  - horario;
+  - funcionario;
+  - empresa; FEITO, copiada do cadastro para a consulta/agendamento.
+  - motivo; FEITO.
+  - observacao;
+  - trabalha armado: sim/nao; FEITO.
+  - status. FEITO.
+- Tornar status editavel apos criacao do agendamento. FEITO: removido bloqueio de validacao que impedia salvar consulta em data passada.
+- Persistir tipo de laudo a partir do campo trabalha armado. FEITO no modelo:
+  - sem arma;
+  - com arma.
+Criterio de aceite:
+- Agendamento criado pode ser reaberto e ter status alterado sem perder dados.
+- Sistema sabe qual laudo pertence ao agendamento.
+
+TASK CLIENTE 5 - IMPLEMENTAR DOWNLOAD DO LAUDO OFICIAL
+Status: FEITO TECNICAMENTE em 07/07/2026; pendente apenas confirmar se KRISTEN.pdf e o PDF oficial correto.
+Entregas:
+- Localizar o PDF oficial em Downloads. PARCIAL: assumido C:\Users\krist\Downloads\KRISTEN.pdf por ser o PDF mais recente em 07/07/2026 09:30; confirmar se e o arquivo oficial correto.
+- Copiar o PDF oficial para pasta de assets/templates do WPF. FEITO:
+  - C:\Users\krist\AgendamentoWpfApp\Assets\Templates\laudos-oficiais.pdf
+  - incluido no build/publish pelo AgendamentoWpfApp.csproj.
+- Separar ou selecionar automaticamente a pagina correta:
+  - pagina 1 para sem arma; FEITO com PdfSharpCore.
+  - pagina 2 para com arma. FEITO com PdfSharpCore.
+- Dependencia adicionada:
+  - PdfSharpCore 1.3.67.
+- Adicionar acao "Baixar laudo" no agendamento/historico. FEITO na aba Laudos.
+- Gerar/download do PDF correto para o funcionario/agendamento selecionado. FEITO: gera arquivo SemArma/ComArma com uma unica pagina correta.
+- Validar se o modelo precisa ser apenas extraido por pagina ou preenchido com dados do funcionario/agendamento.
+Criterio de aceite:
+- Ao clicar em baixar laudo, o sistema salva/abre o PDF correto conforme trabalha armado sim/nao.
+
+TASK CLIENTE 6 - CRIAR HISTORICO DE LAUDOS
+Status: FEITO no WPF em 07/07/2026.
+Entregas:
+- Criar tela/listagem de historico de laudos. FEITO na aba Laudos.
+- Filtros:
+  - data inicial; FEITO.
+  - data final; FEITO.
+  - empresa; FEITO.
+  - funcionario; FEITO.
+  - motivo. FEITO.
+- Tabela:
+  - data; FEITO.
+  - funcionario; FEITO.
+  - empresa; FEITO.
+  - cargo; FEITO.
+  - motivo; FEITO.
+  - tipo de laudo; FEITO.
+  - observacao; FEITO.
+  - status; FEITO.
+  - acoes. FEITO via botoes de acao da tela.
+- Acoes:
+  - baixar laudo; FEITO.
+  - excluir; FEITO.
+  - alterar status/baixa; FEITO indiretamente: baixar laudo marca status como Baixado; status tambem segue editavel na Agenda.
+Criterio de aceite:
+- Usuario encontra laudos por periodo/empresa/funcionario/motivo e baixa o PDF correto.
+
+TASK CLIENTE 7 - CRIAR RELATORIO DE AGENDAMENTOS
+Status: FEITO no WPF em 07/07/2026.
+Entregas:
+- Criar relatorio filtravel por:
+  - data inicial; FEITO.
+  - data final; FEITO.
+  - funcionario; FEITO.
+  - empresa. FEITO.
+- Exibir lista dentro do sistema. FEITO na aba Laudos.
+- Permitir imprimir. FEITO via PrintDialog.
+- Ao filtrar por empresa, listar todos os agendamentos/laudos relacionados a empresa no periodo. FEITO.
+Criterio de aceite:
+- Usuario consegue visualizar e imprimir a lista de agendamentos por empresa/periodo.
+
+TASK CLIENTE 8 - ATUALIZAR BANCO LOCAL E SINCRONIZACAO
+Status: PARCIAL em 07/07/2026.
+Entregas:
+- Atualizar entidades/tabelas SQLite locais do WPF. FEITO.
+- Atualizar migrations locais. FEITO: 20260707100000_AddClienteLaudoFields.
+- Garantir que novos campos entram no snapshot enviado para API. FEITO por snapshot generico do WPF.
+- Avaliar necessidade de ajuste no MySQL/API caso algum relatorio seja futuramente feito no backend.
+Criterio de aceite:
+- Dados novos persistem localmente, sobrevivem ao restart e continuam sincronizando.
+
+TASK CLIENTE 9 - TESTES E VALIDACAO
+Status: PARCIAL em 07/07/2026.
+Entregas:
+- Testar cadastro completo de funcionario com empresa.
+- Testar filtro por empresa.
+- Testar criacao de agendamento com arma.
+- Testar criacao de agendamento sem arma.
+- Testar alteracao de status.
+- Testar download do laudo correto.
+- Testar historico por periodo, empresa, funcionario e motivo.
+- Testar relatorio e impressao.
+- Rodar build/testes existentes do WPF e API quando aplicavel. FEITO em 07/07/2026:
+  - dotnet build C:\Users\krist\AgendamentoWpfApp\AgendamentoWpfApp.sln --ignore-failed-sources: OK, 0 avisos, 0 erros.
+  - dotnet run --project C:\Users\krist\AgendamentoWpfApp\AgendamentoWpfApp.Tests\AgendamentoWpfApp.Tests.csproj: OK.
+  - repetido apos historico/relatorio/download/filtro por empresa: OK.
+  - repetido apos extracao pagina 1/2 do PDF oficial com PdfSharpCore: OK.
+Criterio de aceite:
+- Fluxo principal funciona ponta a ponta no app instalado ou via dotnet run.
+
+Ordem recomendada de execucao:
+1. TASK CLIENTE 2 - Cadastro cliente/funcionario.
+2. TASK CLIENTE 3 - Motivos.
+3. TASK CLIENTE 4 - Agendamento/status/tipo de laudo.
+4. TASK CLIENTE 5 - Download do laudo oficial.
+5. TASK CLIENTE 6 - Historico de laudos.
+6. TASK CLIENTE 7 - Relatorio de agendamentos.
+7. TASK CLIENTE 8 - Banco/sync/API.
+8. TASK CLIENTE 9 - Testes e validacao.
+
+
+19. HOSTINGER / DEPLOY DA API - ANALISE INICIAL
+
+Atualizado em: 07/07/2026.
+
+Contexto:
+- Cliente/desenvolvedor informou que ja possui credenciais da Hostinger.
+- Objetivo imediato: avaliar possibilidade de subir a API ASP.NET Core da retaguarda agora.
+- URL do painel informado:
+  https://hpanel.hostinger.com/websites
+
+Estado atual:
+- Acesso ao hPanel logado ainda nao foi validado pela IA.
+- A IA nao consegue enxergar a sessao aberta no navegador do usuario sem prints ou informacoes copiadas da tela.
+- Proxima decisao critica: confirmar se a conta Hostinger e hospedagem compartilhada, cloud/app hosting ou VPS.
+- Confirmado pelo usuario em 07/07/2026:
+  - Plano: Premium Web Hosting.
+  - Dominio ativo: clinicaideia.com.br.
+  - Dominio/subdominio externo listado: laudos.clinicaideia.com.br.
+  - Servicos conectados encontrados: e-mail e u183827986.hostingerapp.com.
+  - Em Sites > PHP/HTML existe laudos.clinicaideia.com.br.
+  - Diretorio do subdominio:
+    /home/u183827986/domains/clinicaideia.com.br/public_html/laudos
+  - Banco de dados disponivel: phpMyAdmin e MySQL remoto.
+
+Requisitos da API atual:
+- ASP.NET Core .NET 8.
+- MySQL.
+- API publica HTTP/HTTPS.
+- Migrations MySQL precisam ser executadas no servidor.
+- Para deploy real, secrets de banco/e-mail/JWT/token precisam sair dos arquivos locais e ir para variaveis de ambiente/configuracao segura.
+
+Risco principal:
+- Hospedagem compartilhada comum geralmente e voltada a PHP/WordPress e pode nao aceitar rodar processo ASP.NET Core persistente.
+- Se for VPS Hostinger, deploy da API e viavel com Linux + systemd/Nginx + MySQL ou Docker.
+- Se for apenas hospedagem web compartilhada, provavelmente servira para site estatico/PHP, nao para esta API .NET.
+- Diagnostico apos confirmacao do plano:
+  - Premium Web Hosting indica hospedagem compartilhada PHP/HTML.
+  - O sistema atual em laudos.clinicaideia.com.br provavelmente roda como arquivos PHP/HTML dentro de public_html/laudos.
+  - Esse ambiente nao e o destino correto para hospedar a API ASP.NET Core .NET 8 como processo persistente.
+  - MySQL remoto pode ser usado por uma API hospedada fora da Hostinger, se liberado/permitido, mas isso precisa ser avaliado por seguranca, latencia e estabilidade.
+
+Proximas verificacoes no hPanel:
+1. Identificar tipo do plano: Web Hosting, Cloud Hosting, VPS ou outro.
+2. Verificar se existe acesso SSH.
+3. Verificar se permite processo/app persistente, Docker ou Node/App hosting equivalente.
+4. Verificar banco MySQL disponivel, host, porta, usuario, nome do banco e acesso remoto/local.
+5. Verificar dominio/subdominio disponivel para API:
+   api.dominio.com.br
+6. Verificar configuracao DNS do dominio.
+7. Verificar SSL/HTTPS para subdominio da API.
+8. Definir estrategia:
+   - VPS: subir API .NET 8 como service + Nginx reverse proxy.
+   - Hospedagem compartilhada: usar Hostinger apenas para site/DNS e hospedar API em VPS/Azure/outro backend.
+
+Conclusao atual:
+- Com Premium Web Hosting, usar Hostinger para dominio, DNS, e-mail, site e possivelmente MySQL/phpMyAdmin.
+- Para a API .NET 8, contratar VPS ou usar outro servico de backend.
+- Caminho recomendado se quiser manter tudo na Hostinger: contratar VPS KVM e apontar api.clinicaideia.com.br para o IP da VPS.
+
+
+20. DECISAO APROVADA - ARQUITETURA DE IMPLANTACAO
+
+Atualizado em: 07/07/2026.
+
+Decisao validada com o usuario:
+- Seguir com sistema desktop/local como operacao principal.
+- Publicar um frontend web enxuto apenas para:
+  - login
+  - pesquisa de clientes
+  - historico basico
+- Subir a API .NET em VPS, rodando 24h.
+- Depois avaliar se vale levar outros modulos para a web.
+
+Arquitetura alvo aprovada:
+- clinicaideia.com.br -> site institucional na Hostinger.
+- laudos.clinicaideia.com.br -> frontend web leve para acesso externo.
+- api.clinicaideia.com.br -> API .NET hospedada em VPS.
+
+Diretriz tecnica:
+- Nao tentar concentrar tudo na hospedagem compartilhada atual da Hostinger.
+- Usar a Hostinger para dominio, DNS, e site/frontend publicado.
+- Usar VPS para o backend/API e, preferencialmente, tambem para o banco desse modulo web.
+
+Plano pratico aprovado:
+1. Manter o sistema desktop/local como fluxo operacional principal.
+2. Concluir os ajustes do sistema local (cadastro, agenda, laudos, historico, relatorios).
+3. Criar um frontend web enxuto para acesso por celular.
+4. Publicar a API em VPS com disponibilidade continua.
+5. Integrar frontend web com a API publicada.
+6. Reavaliar expansao para outros modulos online somente apos validar uso real da pesquisa externa.
+
+Observacao:
+- Se a Linode atual for cancelada, ela precisa ser substituida por outra VPS/servidor equivalente para a API.
+- A hospedagem compartilhada sozinha nao atende a necessidade da API .NET em producao.
+
+
+21. BANCO DE DADOS ATUAL / HIPOTESES REGISTRADAS
+
+Atualizado em: 07/07/2026.
+
+Pergunta analisada:
+- O banco de dados do sistema atual esta na Linode?
+
+Conclusao registrada:
+- O cenario mais provavel e:
+  - Hostinger: site e frontend publicado.
+  - Linode: backend/API.
+  - Banco de dados: provavelmente junto da API na Linode, ou ao menos acessivel por ela.
+- Isso ainda nao esta 100% comprovado.
+
+Motivos para essa conclusao:
+- O frontend publicado encontrado em public_html/laudos chama a API em:
+  http://li927-43.members.linode.com:9090
+- Foi encontrado comprovante de cobranca Linode/Akamai relacionado ao ambiente atual.
+- Em arquiteturas desse tipo, e comum API e banco estarem no mesmo servidor ou no mesmo provedor.
+
+Possibilidades tecnicas ainda em aberto:
+1. Banco na propria Linode.
+2. Banco na Hostinger, acessado remotamente pela API.
+3. Banco em terceiro ambiente.
+
+Conclusao operacional:
+- A hipotese principal e banco na Linode.
+- Porem isso precisa ser confirmado depois via:
+  - acesso ao painel da Linode
+  - configuracao da API antiga
+  - string de conexao
+  - ou inspecao do servidor/banco real
+
+
+22. MYSQL NA HOSTINGER - INTERPRETACAO CORRETA
+
+Atualizado em: 07/07/2026.
+
+Ponto esclarecido com o usuario:
+- No painel da Hostinger, em Banco de Dados, aparecem:
+  - nome da base de dados MySQL
+  - username MySQL
+  - senha para criar/usar
+
+O que isso significa:
+- A Hostinger oferece recurso de banco MySQL dentro da hospedagem.
+- Esses dados representam:
+  - nome do banco
+  - usuario de acesso
+  - senha do usuario
+
+O que isso NAO significa automaticamente:
+- Nao prova que o sistema atual usa esse banco.
+- So prova que existe MySQL disponivel na Hostinger.
+
+Cenarios possiveis:
+1. O sistema atual usa esse MySQL da Hostinger.
+2. O sistema atual nao usa esse banco e esta com banco na Linode.
+3. Esse banco da Hostinger e usado apenas por site/PHP/WordPress/outra estrutura.
+
+Como confirmar depois se esse MySQL e o banco real do sistema:
+- Abrir o phpMyAdmin.
+- Verificar se existem tabelas como:
+  - clientes
+  - funcionarios
+  - agendamentos
+  - laudos
+  - usuarios
+- Confirmar se existem dados reais da operacao.
+- Se possivel, cruzar com configuracao da API antiga.
+
+Resumo final registrado:
+- Hostinger tem MySQL disponivel.
+- Isso nao prova por si so que o sistema atual usa esse banco.
+- A confirmacao real depende de inspecao do phpMyAdmin ou da configuracao do backend antigo.
+
+
+23. FRONT WEB LEVE - LAUDOS.CLINICAIDEIA.COM.BR
+
+Atualizado em: 07/07/2026.
+
+Objetivo:
+- Criar um frontend simples para acesso pelo celular/navegador.
+- Publicar futuramente no subdominio:
+  laudos.clinicaideia.com.br
+- Manter o sistema desktop/local como operacao principal.
+- Usar o web apenas para login, pesquisa de clientes e historico basico.
+
+Implementado na API:
+- Novo controller:
+  RetaguardaAgendamentoAPI/Controllers/Portal/PortalClientesController.cs
+- Novo service:
+  RetaguardaAgendamentoAPI/Services/Portal/PortalClienteService.cs
+- Novos modelos:
+  RetaguardaAgendamentoAPI/Models/Portal/PortalClienteModels.cs
+
+Endpoints novos:
+- GET /portal/clientes
+  - Query params:
+    - termo
+    - empresa
+    - limite
+  - Exige Authorization: Bearer <token>.
+  - Retorna lista resumida de clientes/funcionarios.
+- GET /portal/clientes/{idLocal}
+  - Exige Authorization: Bearer <token>.
+  - Retorna detalhe do cliente e historico basico.
+
+Regras tecnicas dos endpoints:
+- Sempre validam token com AuthService.
+- Sempre filtram pelo ID_EMPRESA da sessao autenticada.
+- Consultam o banco operacional sincronizado configurado em AgendaOperacionalDatabase.
+- Suportam nomes de tabelas provaveis:
+  - CLIENTE
+  - CLIENTES
+  - FUNCIONARIO
+  - FUNCIONARIOS
+  - CONSULTA
+  - CONSULTAS
+  - AGENDAMENTO
+  - AGENDAMENTOS
+
+Implementado no frontend:
+- Nova pasta:
+  web-laudos
+- Arquivos:
+  - web-laudos/index.html
+  - web-laudos/styles.css
+  - web-laudos/app.js
+  - web-laudos/config.js
+  - web-laudos/README.md
+
+Funcionalidades do frontend:
+- Tela de login.
+- Guarda token em localStorage.
+- Pesquisa por nome, CPF, RG, e-mail, empresa e cargo.
+- Lista clientes encontrados.
+- Abre detalhe do cliente.
+- Mostra dados principais e historico basico.
+- Botao sair limpa sessao local.
+
+Configuracao para producao:
+- Alterar web-laudos/config.js para:
+  API_BASE_URL: "https://api.clinicaideia.com.br"
+
+CORS atualizado na API:
+- Adicionado suporte a:
+  - http://localhost:8080
+  - http://127.0.0.1:8080
+  - https://laudos.clinicaideia.com.br
+  - https://api.clinicaideia.com.br
+
+Validacao feita:
+- dotnet build RetaguardaAgendamentoAPI.sln: OK em 07/07/2026.
+- node --check web-laudos/app.js: OK em 07/07/2026.
+
+Observacao de teste:
+- dotnet test RetaguardaAgendamentoAPI.sln foi executado, mas os testes de integracao falharam porque Docker/Testcontainers nao estava disponivel ou configurado na sessao.
+- Resultado parcial informado pelo runner:
+  - 61 testes passaram.
+  - 58 falharam por erro de fixture Docker, antes de executar a logica dos testes.
+
+Atualizacao posterior em 07/07/2026:
+- Pesquisa do front web ajustada para ter apenas os filtros:
+  - Nome
+  - ID
+  - Empresa
+- API ajustada para aceitar query params:
+  - nome
+  - id
+  - empresa
+  - limite
+- Resultado do cliente agora tambem mostra ID.
+- Detalhe do cliente agora tambem mostra ID.
+- Validacao apos ajuste:
+  - node --check web-laudos/app.js: OK.
+  - dotnet build RetaguardaAgendamentoAPI.sln: OK.
+- API reiniciada em CMD visivel em http://localhost:5000.
+- Front segue disponivel em http://127.0.0.1:8080/.
+
+Atualizacao posterior em 07/07/2026 - regra de ID:
+- Usuario confirmou que o ID correto do cliente deve ser sequencial:
+  - cliente 1
+  - cliente 2
+  - ...
+  - cliente 30000
+- Esse ID deve ser o identificador visivel usado para pesquisa e referencia operacional.
+- Foi constatado no WPF:
+  - Cliente.Id e o ID numerico sequencial do SQLite/EF.
+  - Cliente.IdTexto exibe esse ID formatado.
+  - Cliente.IdLocal ainda e GUID tecnico usado internamente para relacoes/sincronizacao.
+- Ajuste feito no portal:
+  - API agora devolve IdCadastro separado de IdLocal.
+  - Front mostra IdCadastro como ID do cliente.
+  - Front continua usando IdLocal apenas internamente para abrir o detalhe.
+- Validacao apos ajuste:
+  - dotnet build RetaguardaAgendamentoAPI.sln: OK.
+  - node --check web-laudos/app.js: OK.
+
+
+24. DOCUMENTACAO DO SISTEMA - OBSIDIAN / MARKDOWN
+
+Atualizado em: 07/07/2026.
+
+Objetivo:
+- Criar uma pasta organizada de documentacao do SparkCore para consulta no Obsidian e versionamento no projeto.
+- Consolidar tudo que estava no STATUS_E_COMANDOS.txt em documentos separados por assunto.
+- Documentar situacao atual, arquitetura, infra, API, front web, desktop WPF, banco, sincronizacao, Hostinger, VPS, instalador, operacao e roadmap.
+
+Pasta criada:
+- C:\Users\krist\RetaguardaAgendamentoAPI\documentacao-sistema
+
+Arquivos criados:
+- 00-README.md
+- 01-situacao-atual.md
+- 02-arquitetura-e-infra.md
+- 03-api-backend.md
+- 04-front-web-laudos.md
+- 05-desktop-wpf-instalador.md
+- 06-banco-dados-sincronizacao.md
+- 07-deploy-vps-api.md
+- 08-hostinger-subdominios.md
+- 09-operacao-checklists.md
+- 10-pendencias-roadmap.md
+
+Padrao usado:
+- Markdown compativel com Obsidian.
+- Indice com links internos estilo [[arquivo|titulo]].
+- Separacao inspirada em boas praticas de documentacao tecnica:
+  - visao/explicacao;
+  - guias de como fazer;
+  - referencia tecnica;
+  - roadmap/checklists.
+
+Referencias externas usadas na organizacao:
+- Diataxis: https://diataxis.fr/
+- Twelve-Factor App - config: https://12factor.net/config
+- Twelve-Factor App - build/release/run: https://12factor.net/build-release-run
+- Azure Architecture Fundamentals: https://learn.microsoft.com/en-us/azure/architecture/guide/
+
+Observacao de seguranca:
+- Nenhuma senha real foi adicionada na documentacao.
+- A documentacao usa nomes de variaveis, dominios, paths e exemplos operacionais.
+
+
+25. IMPORTACAO DOS DADOS REAIS DA CLINICA IDEIA - 10/07/2026
+
+Resumo:
+- O dump real da Clinica Ideia foi encontrado localmente em:
+  - C:\Users\krist\RetaguardaAgendamentoAPI\backups\clinica-ideia\ideia-api_20260710_163435.sql
+- Esse arquivo NAO pode ser deletado.
+- Ele contem os dados reais antigos, incluindo:
+  - funcionario: 48.403 registros
+  - agendamento: 9.129 registros
+  - laudo: 8.117 registros
+  - agenda: 9.503 registros
+  - horario: 9.783 registros
+- Os 1001 registros que existiam antes no SparkCore eram dados de teste e foram substituidos.
+
+Estado atual apos importacao:
+- SQLite local do WPF:
+  - C:\Users\krist\AppData\Local\RetaguardaAgendamento\agenda.sqlite
+  - CLIENTES: 48.403
+  - CONSULTAS: 9.129
+- Postgres local da API:
+  - Container: agenda-db-postgres
+  - Banco: retaguarda_agendamento
+  - Schema: agenda_operacional
+  - id_empresa: 2
+  - dispositivo_id: KRISTEN
+  - clientes: 48.403
+  - consultas: 9.129
+- Validacao feita:
+  - SQLite e Postgres batem 100%.
+  - Faltando no SQLite: 0
+  - Faltando no Postgres: 0
+
+Backups feitos antes da importacao:
+- SQLite:
+  - C:\Users\krist\AgendamentoWpfApp\artifacts\backups\agenda-sqlite-before-legacy-import-20260710-205916.sqlite
+- Postgres:
+  - C:\Users\krist\AgendamentoWpfApp\artifacts\backups\retaguarda-postgres-before-legacy-import-20260710-205930.dump
+
+Ajustes no WPF:
+- CPF duplicado agora e permitido.
+- Motivo: o banco real possui muitos CPFs repetidos, incluindo CPF 00000000000 em milhares de registros.
+- Sem esse ajuste, a importacao completa para SQLite falharia ou exigiria descartar dados, o que nao pode acontecer.
+- Instalador gerado:
+  - C:\Users\krist\AgendamentoWpfApp\artifacts\installer\SparkCore-Setup-1.0.4.exe
+
+Problema observado para verificar depois:
+- O WPF pode parecer travado ou demorar ao abrir/carregar apos login.
+- Causa provavel: carregamento em memoria/listagem de 48.403 clientes no SQLite.
+- Para teste local, rodar:
+  - API: http://localhost:5000
+  - WPF:
+    set AGENDAMENTO_RETAGUARDA_URL=http://localhost:5000
+    C:\Users\krist\AgendamentoWpfApp\artifacts\installer\publish\AgendamentoWpfApp.exe
+- Melhorias recomendadas:
+  - Paginar a pesquisa de clientes.
+  - Evitar carregar todos os clientes na inicializacao.
+  - Carregar clientes sob demanda por busca.
+  - Indexar bem Nome, CPF, Empresa, Cargo e IdLocal.
+  - Separar tela de pesquisa pesada da tela de agenda do dia.

@@ -1,6 +1,6 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
-using MySql.Data.MySqlClient;
+using Npgsql;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -34,7 +34,7 @@ namespace RetaguardaAgendamentoAPI.Services
             if (string.IsNullOrWhiteSpace(connectionString))
                 throw new InvalidOperationException("ConnectionStrings:DefaultConnection nao configurada.");
 
-            var retaguardaDatabase = new MySqlConnectionStringBuilder(connectionString).Database
+            var retaguardaDatabase = new NpgsqlConnectionStringBuilder(connectionString).SearchPath
                 ?? "retaguarda_agendamento";
             var operacionalDatabase = Environment.GetEnvironmentVariable("AGENDA_OPERACIONAL_DATABASE")
                 ?? configuration.GetValue<string>("AgendaOperacionalDatabase")
@@ -42,7 +42,7 @@ namespace RetaguardaAgendamentoAPI.Services
 
             var faltantes = new List<string>();
 
-            await using (var connection = new MySqlConnection(connectionString))
+            await using (var connection = new NpgsqlConnection(connectionString))
             {
                 try
                 {
@@ -51,7 +51,7 @@ namespace RetaguardaAgendamentoAPI.Services
                 catch (Exception ex)
                 {
                     logger.LogWarning(ex,
-                        "MySQL indisponivel no startup; verificacao de schema adiada. /health reportara DEGRADED ate o banco voltar.");
+                        "Postgres indisponivel no startup; verificacao de schema adiada. /health reportara DEGRADED ate o banco voltar.");
                     return;
                 }
 
@@ -67,24 +67,24 @@ namespace RetaguardaAgendamentoAPI.Services
             }
             else
             {
-                await using var adminConnection = new MySqlConnection(adminConnectionString);
+                await using var adminConnection = new NpgsqlConnection(adminConnectionString);
                 try
                 {
                     await adminConnection.OpenAsync();
                     faltantes.AddRange(await ListarFaltantesAsync(adminConnection, operacionalDatabase, TabelasOperacional));
                 }
-                catch (MySqlException ex)
+                catch (NpgsqlException ex)
                 {
                     logger.LogWarning(ex,
-                        "AdminConnection indisponivel no startup; verificacao do banco operacional adiada. Rode .\\apply-mysql-migrations.ps1 se o snapshot falhar.");
+                        "AdminConnection indisponivel no startup; verificacao do schema operacional adiada. Rode .\\apply-postgres-migrations.ps1 se o snapshot falhar.");
                 }
             }
 
             if (faltantes.Count > 0)
             {
                 throw new InvalidOperationException(
-                    "Schema do MySQL incompleto. Tabelas faltantes: " + string.Join(", ", faltantes) +
-                    ". Rode .\\apply-mysql-migrations.ps1 com o MySQL ativo antes de subir a API.");
+                    "Schema do Postgres incompleto. Tabelas faltantes: " + string.Join(", ", faltantes) +
+                    ". Rode .\\apply-postgres-migrations.ps1 com o Postgres ativo antes de subir a API.");
             }
 
             logger.LogInformation(
@@ -94,11 +94,11 @@ namespace RetaguardaAgendamentoAPI.Services
         }
 
         private static async Task<List<string>> ListarFaltantesAsync(
-            MySqlConnection connection, string database, IReadOnlyCollection<string> tabelas)
+            NpgsqlConnection connection, string database, IReadOnlyCollection<string> tabelas)
         {
             var existentes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-            await using var command = new MySqlCommand(@"
+            await using var command = new NpgsqlCommand(@"
                 SELECT TABLE_NAME
                   FROM INFORMATION_SCHEMA.TABLES
                  WHERE TABLE_SCHEMA = @database", connection);

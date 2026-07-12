@@ -1,5 +1,5 @@
 ﻿using Microsoft.Extensions.Configuration;
-using MySql.Data.MySqlClient;
+using Npgsql;
 using System;
 using System.Security.Cryptography;
 using System.Text;
@@ -34,7 +34,7 @@ namespace RetaguardaAgendamentoAPI.Services.Auth
             var senha = request.Senha.Trim();
             var perfil = string.IsNullOrWhiteSpace(request.Perfil) ? "Administrador" : request.Perfil.Trim();
 
-            await using var connection = new MySqlConnection(_connectionString);
+            await using var connection = new NpgsqlConnection(_connectionString);
             await connection.OpenAsync();
 
             if (await ObterUsuarioIdPorEmailAsync(connection, email) != null)
@@ -78,7 +78,7 @@ namespace RetaguardaAgendamentoAPI.Services.Auth
             if (string.IsNullOrWhiteSpace(codigo))
                 throw new ArgumentException("Codigo de confirmacao obrigatorio.");
 
-            await using var connection = new MySqlConnection(_connectionString);
+            await using var connection = new NpgsqlConnection(_connectionString);
             await connection.OpenAsync();
 
             var tokenHash = HashToken(codigo);
@@ -90,11 +90,11 @@ namespace RetaguardaAgendamentoAPI.Services.Auth
                    AND t.TIPO = 'CONFIRMACAO_EMAIL'
                    AND t.TOKEN_HASH = @tokenHash
                    AND t.USADO_EM IS NULL
-                   AND t.EXPIRA_EM > UTC_TIMESTAMP()
+                   AND t.EXPIRA_EM > (now() at time zone 'utc')
                    AND u.ATIVO = 'S'
                  LIMIT 1";
 
-            await using var localizar = new MySqlCommand(sql, connection);
+            await using var localizar = new NpgsqlCommand(sql, connection);
             localizar.Parameters.AddWithValue("@email", email);
             localizar.Parameters.AddWithValue("@tokenHash", tokenHash);
 
@@ -110,16 +110,16 @@ namespace RetaguardaAgendamentoAPI.Services.Auth
             await using var transaction = await connection.BeginTransactionAsync();
             try
             {
-                await ExecutarAsync(connection, (MySqlTransaction)transaction,
-                    "UPDATE RET_EMAIL_TOKEN SET USADO_EM = UTC_TIMESTAMP() WHERE ID = @id",
+                await ExecutarAsync(connection, (NpgsqlTransaction)transaction,
+                    "UPDATE RET_EMAIL_TOKEN SET USADO_EM = (now() at time zone 'utc') WHERE ID = @id",
                     ("@id", tokenId));
 
-                await ExecutarAsync(connection, (MySqlTransaction)transaction,
-                    "UPDATE RET_USUARIO SET CONFIRMADO = 'S', CONFIRMADO_EM = UTC_TIMESTAMP() WHERE ID = @id",
+                await ExecutarAsync(connection, (NpgsqlTransaction)transaction,
+                    "UPDATE RET_USUARIO SET CONFIRMADO = 'S', CONFIRMADO_EM = (now() at time zone 'utc') WHERE ID = @id",
                     ("@id", usuarioId));
 
-                await ExecutarAsync(connection, (MySqlTransaction)transaction,
-                    "UPDATE EMPRESA SET REGISTRADO = 'S', DATA_REGISTRO = COALESCE(DATA_REGISTRO, UTC_DATE()), HORA_REGISTRO = COALESCE(HORA_REGISTRO, DATE_FORMAT(UTC_TIME(), '%H:%i:%s')) WHERE ID = @id",
+                await ExecutarAsync(connection, (NpgsqlTransaction)transaction,
+                    "UPDATE EMPRESA SET REGISTRADO = 'S', DATA_REGISTRO = COALESCE(DATA_REGISTRO, CAST(now() at time zone 'utc' AS date)), HORA_REGISTRO = COALESCE(HORA_REGISTRO, to_char(CAST(now() at time zone 'utc' AS time), 'HH24:MI:SS')) WHERE ID = @id",
                     ("@id", empresaId));
 
                 await transaction.CommitAsync();
@@ -146,7 +146,7 @@ namespace RetaguardaAgendamentoAPI.Services.Auth
             if (string.IsNullOrWhiteSpace(email) || email.IndexOf('@') <= 0)
                 throw new ArgumentException("E-mail valido e obrigatorio.");
 
-            await using var connection = new MySqlConnection(_connectionString);
+            await using var connection = new NpgsqlConnection(_connectionString);
             await connection.OpenAsync();
 
             const string sql = @"
@@ -157,7 +157,7 @@ namespace RetaguardaAgendamentoAPI.Services.Auth
                    AND u.ATIVO = 'S'
                  LIMIT 1";
 
-            await using var command = new MySqlCommand(sql, connection);
+            await using var command = new NpgsqlCommand(sql, connection);
             command.Parameters.AddWithValue("@email", email);
             await using var reader = await command.ExecuteReaderAsync();
             if (!await reader.ReadAsync())
@@ -199,7 +199,7 @@ namespace RetaguardaAgendamentoAPI.Services.Auth
             if (string.IsNullOrWhiteSpace(email) || email.IndexOf('@') <= 0 || string.IsNullOrWhiteSpace(senha))
                 throw new ArgumentException("E-mail e senha sao obrigatorios.");
 
-            await using var connection = new MySqlConnection(_connectionString);
+            await using var connection = new NpgsqlConnection(_connectionString);
             await connection.OpenAsync();
 
             const string sql = @"
@@ -210,7 +210,7 @@ namespace RetaguardaAgendamentoAPI.Services.Auth
                    AND u.ATIVO = 'S'
                  LIMIT 1";
 
-            await using var command = new MySqlCommand(sql, connection);
+            await using var command = new NpgsqlCommand(sql, connection);
             command.Parameters.AddWithValue("@email", email);
 
             await using var reader = await command.ExecuteReaderAsync();
@@ -259,7 +259,7 @@ namespace RetaguardaAgendamentoAPI.Services.Auth
                 Mensagem = "Se o e-mail estiver cadastrado, um codigo de redefinicao sera enviado."
             };
 
-            await using var connection = new MySqlConnection(_connectionString);
+            await using var connection = new NpgsqlConnection(_connectionString);
             await connection.OpenAsync();
 
             const string sql = @"
@@ -272,7 +272,7 @@ namespace RetaguardaAgendamentoAPI.Services.Auth
                    AND COALESCE(u.CONFIRMADO, 'S') = 'S'
                  LIMIT 1";
 
-            await using var localizar = new MySqlCommand(sql, connection);
+            await using var localizar = new NpgsqlCommand(sql, connection);
             localizar.Parameters.AddWithValue("@email", email);
 
             int usuarioId;
@@ -316,7 +316,7 @@ namespace RetaguardaAgendamentoAPI.Services.Auth
             if (string.IsNullOrWhiteSpace(request.NovaSenha) || request.NovaSenha.Trim().Length < 8)
                 throw new ArgumentException("Nova senha deve possuir pelo menos 8 caracteres.");
 
-            await using var connection = new MySqlConnection(_connectionString);
+            await using var connection = new NpgsqlConnection(_connectionString);
             await connection.OpenAsync();
 
             var tokenHash = HashToken(codigo);
@@ -328,11 +328,11 @@ namespace RetaguardaAgendamentoAPI.Services.Auth
                    AND t.TIPO = @tipo
                    AND t.TOKEN_HASH = @tokenHash
                    AND t.USADO_EM IS NULL
-                   AND t.EXPIRA_EM > UTC_TIMESTAMP()
+                   AND t.EXPIRA_EM > (now() at time zone 'utc')
                    AND u.ATIVO = 'S'
                  LIMIT 1";
 
-            await using var localizar = new MySqlCommand(sql, connection);
+            await using var localizar = new NpgsqlCommand(sql, connection);
             localizar.Parameters.AddWithValue("@email", email);
             localizar.Parameters.AddWithValue("@tipo", TipoTokenResetSenha);
             localizar.Parameters.AddWithValue("@tokenHash", tokenHash);
@@ -353,16 +353,16 @@ namespace RetaguardaAgendamentoAPI.Services.Auth
             await using var transaction = await connection.BeginTransactionAsync();
             try
             {
-                await ExecutarAsync(connection, (MySqlTransaction)transaction,
-                    "UPDATE RET_EMAIL_TOKEN SET USADO_EM = UTC_TIMESTAMP() WHERE ID = @id",
+                await ExecutarAsync(connection, (NpgsqlTransaction)transaction,
+                    "UPDATE RET_EMAIL_TOKEN SET USADO_EM = (now() at time zone 'utc') WHERE ID = @id",
                     ("@id", tokenId));
 
-                await ExecutarAsync(connection, (MySqlTransaction)transaction,
+                await ExecutarAsync(connection, (NpgsqlTransaction)transaction,
                     "UPDATE RET_USUARIO SET SENHA_HASH = @senhaHash, SENHA_SALT = '' WHERE ID = @id",
                     ("@senhaHash", senhaHash), ("@id", usuarioId));
 
                 // Redefinir a senha derruba todas as sessoes ativas do usuario.
-                await ExecutarAsync(connection, (MySqlTransaction)transaction,
+                await ExecutarAsync(connection, (NpgsqlTransaction)transaction,
                     "UPDATE RET_SESSAO SET REVOGADO = 'S' WHERE ID_USUARIO = @id AND REVOGADO = 'N'",
                     ("@id", usuarioId));
 
@@ -386,7 +386,7 @@ namespace RetaguardaAgendamentoAPI.Services.Auth
             if (string.IsNullOrWhiteSpace(token))
                 throw new UnauthorizedAccessException("Token nao informado.");
 
-            await using var connection = new MySqlConnection(_connectionString);
+            await using var connection = new NpgsqlConnection(_connectionString);
             await connection.OpenAsync();
 
             var tokenHash = HashToken(token);
@@ -397,13 +397,13 @@ namespace RetaguardaAgendamentoAPI.Services.Auth
                   JOIN EMPRESA e ON e.ID = u.ID_EMPRESA
                  WHERE s.TOKEN_HASH = @tokenHash
                    AND s.REVOGADO = 'N'
-                   AND s.EXPIRA_EM > UTC_TIMESTAMP()
+                   AND s.EXPIRA_EM > (now() at time zone 'utc')
                    AND u.ATIVO = 'S'
                    AND COALESCE(u.CONFIRMADO, 'S') = 'S'
                    AND COALESCE(e.REGISTRADO, 'S') = 'S'
                   LIMIT 1";
 
-            await using var command = new MySqlCommand(sql, connection);
+            await using var command = new NpgsqlCommand(sql, connection);
             command.Parameters.AddWithValue("@tokenHash", tokenHash);
             await using var reader = await command.ExecuteReaderAsync();
             if (!await reader.ReadAsync())
@@ -431,33 +431,33 @@ namespace RetaguardaAgendamentoAPI.Services.Auth
                 throw new ArgumentException("Senha deve possuir pelo menos 8 caracteres.");
         }
 
-        private static async Task ExecutarAsync(MySqlConnection connection, MySqlTransaction transaction, string sql, params (string Nome, object Valor)[] parametros)
+        private static async Task ExecutarAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, string sql, params (string Nome, object Valor)[] parametros)
         {
-            await using var command = new MySqlCommand(sql, connection, transaction);
+            await using var command = new NpgsqlCommand(sql, connection, transaction);
             foreach (var parametro in parametros)
                 command.Parameters.AddWithValue(parametro.Nome, parametro.Valor ?? DBNull.Value);
 
             await command.ExecuteNonQueryAsync();
         }
 
-        private static async Task<int?> ObterEmpresaIdAsync(MySqlConnection connection, string cnpj)
+        private static async Task<int?> ObterEmpresaIdAsync(NpgsqlConnection connection, string cnpj)
         {
-            await using var command = new MySqlCommand("SELECT ID FROM EMPRESA WHERE CNPJ = @cnpj LIMIT 1", connection);
+            await using var command = new NpgsqlCommand("SELECT ID FROM EMPRESA WHERE CNPJ = @cnpj LIMIT 1", connection);
             command.Parameters.AddWithValue("@cnpj", cnpj);
             var result = await command.ExecuteScalarAsync();
             return result == null || result == DBNull.Value ? null : Convert.ToInt32(result);
         }
 
-        private static async Task<int> InserirEmpresaAsync(MySqlConnection connection, string cnpj, CriarContaRequest request)
+        private static async Task<int> InserirEmpresaAsync(NpgsqlConnection connection, string cnpj, CriarContaRequest request)
         {
             const string sql = @"
                 INSERT INTO EMPRESA
                     (RAZAO_SOCIAL, NOME_FANTASIA, CNPJ, EMAIL, REGISTRADO, DATA_REGISTRO, HORA_REGISTRO)
                 VALUES
-                    (@razaoSocial, @nomeFantasia, @cnpj, @email, 'P', NULL, NULL);
-                SELECT LAST_INSERT_ID();";
+                    (@razaoSocial, @nomeFantasia, @cnpj, @email, 'P', NULL, NULL)
+                RETURNING ID;";
 
-            await using var command = new MySqlCommand(sql, connection);
+            await using var command = new NpgsqlCommand(sql, connection);
             command.Parameters.AddWithValue("@razaoSocial", ValorOuPadrao(request.RazaoSocial, request.NomeFantasia, "Empresa Agenda"));
             command.Parameters.AddWithValue("@nomeFantasia", ValorOuPadrao(request.NomeFantasia, request.RazaoSocial, "Empresa Agenda"));
             command.Parameters.AddWithValue("@cnpj", cnpj);
@@ -465,33 +465,33 @@ namespace RetaguardaAgendamentoAPI.Services.Auth
             return Convert.ToInt32(await command.ExecuteScalarAsync());
         }
 
-        private static async Task<int?> ObterUsuarioIdAsync(MySqlConnection connection, int empresaId, string login)
+        private static async Task<int?> ObterUsuarioIdAsync(NpgsqlConnection connection, int empresaId, string login)
         {
-            await using var command = new MySqlCommand("SELECT ID FROM RET_USUARIO WHERE ID_EMPRESA = @empresaId AND LOWER(LOGIN) = @login LIMIT 1", connection);
+            await using var command = new NpgsqlCommand("SELECT ID FROM RET_USUARIO WHERE ID_EMPRESA = @empresaId AND LOWER(LOGIN) = @login LIMIT 1", connection);
             command.Parameters.AddWithValue("@empresaId", empresaId);
             command.Parameters.AddWithValue("@login", login);
             var result = await command.ExecuteScalarAsync();
             return result == null || result == DBNull.Value ? null : Convert.ToInt32(result);
         }
 
-        private static async Task<int?> ObterUsuarioIdPorEmailAsync(MySqlConnection connection, string email)
+        private static async Task<int?> ObterUsuarioIdPorEmailAsync(NpgsqlConnection connection, string email)
         {
-            await using var command = new MySqlCommand("SELECT ID FROM RET_USUARIO WHERE LOWER(EMAIL) = @email LIMIT 1", connection);
+            await using var command = new NpgsqlCommand("SELECT ID FROM RET_USUARIO WHERE LOWER(EMAIL) = @email LIMIT 1", connection);
             command.Parameters.AddWithValue("@email", email);
             var result = await command.ExecuteScalarAsync();
             return result == null || result == DBNull.Value ? null : Convert.ToInt32(result);
         }
 
-        private static async Task<string> ObterUsuarioConfirmadoAsync(MySqlConnection connection, int usuarioId)
+        private static async Task<string> ObterUsuarioConfirmadoAsync(NpgsqlConnection connection, int usuarioId)
         {
-            await using var command = new MySqlCommand("SELECT COALESCE(CONFIRMADO, 'S') FROM RET_USUARIO WHERE ID = @id LIMIT 1", connection);
+            await using var command = new NpgsqlCommand("SELECT COALESCE(CONFIRMADO, 'S') FROM RET_USUARIO WHERE ID = @id LIMIT 1", connection);
             command.Parameters.AddWithValue("@id", usuarioId);
             return (await command.ExecuteScalarAsync())?.ToString() ?? "S";
         }
 
-        private static async Task AtualizarUsuarioPendenteAsync(MySqlConnection connection, int usuarioId, string nome, string email, string perfil)
+        private static async Task AtualizarUsuarioPendenteAsync(NpgsqlConnection connection, int usuarioId, string nome, string email, string perfil)
         {
-            await using var command = new MySqlCommand(@"
+            await using var command = new NpgsqlCommand(@"
                 UPDATE RET_USUARIO
                    SET NOME = @nome,
                        EMAIL = @email,
@@ -505,16 +505,16 @@ namespace RetaguardaAgendamentoAPI.Services.Auth
             await command.ExecuteNonQueryAsync();
         }
 
-        private static async Task<int> InserirUsuarioAsync(MySqlConnection connection, int empresaId, string nome, string login, string senhaHash, string salt, string perfil, string email)
+        private static async Task<int> InserirUsuarioAsync(NpgsqlConnection connection, int empresaId, string nome, string login, string senhaHash, string salt, string perfil, string email)
         {
             const string sql = @"
                 INSERT INTO RET_USUARIO
                     (ID_EMPRESA, NOME, LOGIN, EMAIL, SENHA_HASH, SENHA_SALT, PERFIL, CONFIRMADO, ATIVO)
                 VALUES
-                    (@empresaId, @nome, @login, @email, @senhaHash, @salt, @perfil, 'P', 'S');
-                SELECT LAST_INSERT_ID();";
+                    (@empresaId, @nome, @login, @email, @senhaHash, @salt, @perfil, 'P', 'S')
+                RETURNING ID;";
 
-            await using var command = new MySqlCommand(sql, connection);
+            await using var command = new NpgsqlCommand(sql, connection);
             command.Parameters.AddWithValue("@empresaId", empresaId);
             command.Parameters.AddWithValue("@nome", ValorOuPadrao(nome, login, "Administrador"));
             command.Parameters.AddWithValue("@login", login);
@@ -525,29 +525,29 @@ namespace RetaguardaAgendamentoAPI.Services.Auth
             return Convert.ToInt32(await command.ExecuteScalarAsync());
         }
 
-        private static async Task AtualizarSenhaAsync(MySqlConnection connection, int usuarioId, string senhaHash)
+        private static async Task AtualizarSenhaAsync(NpgsqlConnection connection, int usuarioId, string senhaHash)
         {
-            await using var command = new MySqlCommand(
+            await using var command = new NpgsqlCommand(
                 "UPDATE RET_USUARIO SET SENHA_HASH = @senhaHash, SENHA_SALT = '' WHERE ID = @id", connection);
             command.Parameters.AddWithValue("@senhaHash", senhaHash);
             command.Parameters.AddWithValue("@id", usuarioId);
             await command.ExecuteNonQueryAsync();
         }
 
-        private static async Task AtualizarUltimoLoginAsync(MySqlConnection connection, int usuarioId)
+        private static async Task AtualizarUltimoLoginAsync(NpgsqlConnection connection, int usuarioId)
         {
-            await using var command = new MySqlCommand("UPDATE RET_USUARIO SET ULTIMO_LOGIN = UTC_TIMESTAMP() WHERE ID = @id", connection);
+            await using var command = new NpgsqlCommand("UPDATE RET_USUARIO SET ULTIMO_LOGIN = (now() at time zone 'utc') WHERE ID = @id", connection);
             command.Parameters.AddWithValue("@id", usuarioId);
             await command.ExecuteNonQueryAsync();
         }
 
-        private static async Task<AuthResponse> CriarSessaoAsync(MySqlConnection connection, int empresaId, int usuarioId)
+        private static async Task<AuthResponse> CriarSessaoAsync(NpgsqlConnection connection, int empresaId, int usuarioId)
         {
             var token = CriarTokenSeguro(48);
             var expiraEm = DateTime.UtcNow.AddHours(12);
             var tokenHash = HashToken(token);
 
-            await using var command = new MySqlCommand(@"
+            await using var command = new NpgsqlCommand(@"
                 INSERT INTO RET_SESSAO (ID_USUARIO, TOKEN_HASH, EXPIRA_EM, REVOGADO)
                 VALUES (@usuarioId, @tokenHash, @expiraEm, 'N')", connection);
             command.Parameters.AddWithValue("@usuarioId", usuarioId);
@@ -558,7 +558,7 @@ namespace RetaguardaAgendamentoAPI.Services.Auth
             return await MontarRespostaAsync(connection, empresaId, usuarioId, token, expiraEm);
         }
 
-        private static async Task<AuthResponse> MontarRespostaAsync(MySqlConnection connection, int empresaId, int usuarioId, string token, DateTime? expiraEm)
+        private static async Task<AuthResponse> MontarRespostaAsync(NpgsqlConnection connection, int empresaId, int usuarioId, string token, DateTime? expiraEm)
         {
             const string sql = @"
                 SELECT
@@ -568,7 +568,7 @@ namespace RetaguardaAgendamentoAPI.Services.Auth
                 JOIN EMPRESA e ON e.ID = u.ID_EMPRESA
                 WHERE u.ID = @usuarioId AND e.ID = @empresaId";
 
-            await using var command = new MySqlCommand(sql, connection);
+            await using var command = new NpgsqlCommand(sql, connection);
             command.Parameters.AddWithValue("@usuarioId", usuarioId);
             command.Parameters.AddWithValue("@empresaId", empresaId);
             await using var reader = await command.ExecuteReaderAsync();
@@ -610,7 +610,7 @@ namespace RetaguardaAgendamentoAPI.Services.Auth
             return "agenda_operacional";
         }
 
-        private async Task<AuthResponse> GerarEnviarConfirmacaoAsync(MySqlConnection connection, int usuarioId, string email, string nome, AuthResponse resposta)
+        private async Task<AuthResponse> GerarEnviarConfirmacaoAsync(NpgsqlConnection connection, int usuarioId, string email, string nome, AuthResponse resposta)
         {
             var confirmacao = await GerarEnviarConfirmacaoAsync(connection, usuarioId, email, nome);
             resposta.EmailConfirmacaoEnviado = confirmacao.Mensagem.Contains("enviado", StringComparison.OrdinalIgnoreCase);
@@ -619,7 +619,7 @@ namespace RetaguardaAgendamentoAPI.Services.Auth
             return resposta;
         }
 
-        private async Task<ConfirmacaoEmailResponse> GerarEnviarConfirmacaoAsync(MySqlConnection connection, int usuarioId, string email, string nome)
+        private async Task<ConfirmacaoEmailResponse> GerarEnviarConfirmacaoAsync(NpgsqlConnection connection, int usuarioId, string email, string nome)
         {
             var codigo = CriarCodigoConfirmacao();
             var expiraEm = DateTime.UtcNow.AddMinutes(30);
@@ -644,11 +644,11 @@ namespace RetaguardaAgendamentoAPI.Services.Auth
             return response;
         }
 
-        private static async Task RegistrarTokenAsync(MySqlConnection connection, int usuarioId, string tipo, string codigo, DateTime expiraEm)
+        private static async Task RegistrarTokenAsync(NpgsqlConnection connection, int usuarioId, string tipo, string codigo, DateTime expiraEm)
         {
-            await using var revogarAntigos = new MySqlCommand(@"
+            await using var revogarAntigos = new NpgsqlCommand(@"
                 UPDATE RET_EMAIL_TOKEN
-                   SET USADO_EM = UTC_TIMESTAMP()
+                   SET USADO_EM = (now() at time zone 'utc')
                  WHERE ID_USUARIO = @usuarioId
                    AND TIPO = @tipo
                    AND USADO_EM IS NULL", connection);
@@ -656,7 +656,7 @@ namespace RetaguardaAgendamentoAPI.Services.Auth
             revogarAntigos.Parameters.AddWithValue("@tipo", tipo);
             await revogarAntigos.ExecuteNonQueryAsync();
 
-            await using var inserir = new MySqlCommand(@"
+            await using var inserir = new NpgsqlCommand(@"
                 INSERT INTO RET_EMAIL_TOKEN
                     (ID_USUARIO, TIPO, TOKEN_HASH, EXPIRA_EM)
                 VALUES

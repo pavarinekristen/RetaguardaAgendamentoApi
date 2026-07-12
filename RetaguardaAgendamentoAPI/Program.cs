@@ -12,6 +12,11 @@ namespace RetaguardaAgendamentoAPI
     {
         public static void Main(string[] args)
         {
+            // Npgsql 6+ passou a mapear DateTime.Kind=Utc para timestamptz e recusa gravar
+            // em colunas "timestamp without time zone". O codigo grava DateTime.UtcNow em
+            // colunas TIMESTAMP, entao mantemos o comportamento legado (ignora o Kind).
+            AppContext.SetSwitch("Npgsql.EnableLegacyTimestampBehavior", true);
+
             var host = CreateHostBuilder(args).Build();
             var logger = host.Services.GetRequiredService<ILogger<Program>>();
 

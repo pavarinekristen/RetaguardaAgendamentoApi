@@ -1,11 +1,11 @@
 ﻿using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
-using MySql.Data.MySqlClient;
+using Npgsql;
 using RetaguardaAgendamentoAPI.Models.Auth;
 using RetaguardaAgendamentoAPI.Services.Auth;
 using RetaguardaAgendamentoAPI.Services.Email;
 using RetaguardaAgendamentoAPI.Util;
-using Testcontainers.MySql;
+using Testcontainers.PostgreSql;
 using Xunit;
 
 namespace RetaguardaAgendamentoAPI.Tests.Auth;
@@ -14,10 +14,10 @@ namespace RetaguardaAgendamentoAPI.Tests.Auth;
 /// Fixture compartilhada: sobe UM container MySQL para toda a classe de testes.
 /// Cada teste usa emails Ãºnicos, por isso nÃ£o hÃ¡ conflito sem necessidade de limpar entre testes.
 /// </summary>
-public sealed class MySqlFixture : IAsyncLifetime
+public sealed class PostgresFixture : IAsyncLifetime
 {
-    private readonly MySqlContainer _container = new MySqlBuilder()
-        .WithDatabase("retaguarda_sh")
+    private readonly PostgreSqlContainer _container = new PostgreSqlBuilder()
+        .WithDatabase("retaguarda_agendamento")
         .WithUsername("test_user")
         .WithPassword("test_pass")
         .Build();
@@ -27,106 +27,108 @@ public sealed class MySqlFixture : IAsyncLifetime
     public async Task InitializeAsync()
     {
         await _container.StartAsync();
-        ConnectionString = _container.GetConnectionString();
+        // O AuthService usa identificadores sem schema; o Search Path resolve para
+        // retaguarda_agendamento, igual a connection string real da API.
+        ConnectionString = _container.GetConnectionString() + ";Search Path=retaguarda_agendamento";
         await CriarSchemaAsync();
     }
 
     public async Task DisposeAsync() => await _container.DisposeAsync();
 
     /// <summary>
-    /// O schema e responsabilidade das migrations (mysql-migrations/001_baseline_schema.sql);
+    /// O schema e responsabilidade das migrations (postgres-migrations/001_baseline_schema.sql);
     /// a API nao cria mais tabelas em runtime. Aqui replicamos as tabelas de auth do baseline
     /// no banco do container.
     /// </summary>
     private async Task CriarSchemaAsync()
     {
         const string ddl = @"
-            CREATE TABLE IF NOT EXISTS `EMPRESA` (
-              `ID` INT UNSIGNED NOT NULL AUTO_INCREMENT,
-              `RAZAO_SOCIAL` VARCHAR(150) NULL,
-              `NOME_FANTASIA` VARCHAR(150) NULL,
-              `CNPJ` VARCHAR(14) NULL,
-              `INSCRICAO_ESTADUAL` VARCHAR(30) NULL,
-              `INSCRICAO_MUNICIPAL` VARCHAR(30) NULL,
-              `TIPO_REGIME` CHAR(1) NULL,
-              `CRT` CHAR(1) NULL,
-              `DATA_CONSTITUICAO` DATE NULL,
-              `TIPO` CHAR(1) NULL,
-              `EMAIL` VARCHAR(250) NULL,
-              `LOGRADOURO` VARCHAR(250) NULL,
-              `NUMERO` VARCHAR(10) NULL,
-              `COMPLEMENTO` VARCHAR(100) NULL,
-              `CEP` VARCHAR(8) NULL,
-              `BAIRRO` VARCHAR(100) NULL,
-              `CIDADE` VARCHAR(100) NULL,
-              `UF` CHAR(2) NULL,
-              `FONE` VARCHAR(15) NULL,
-              `CONTATO` VARCHAR(30) NULL,
-              `CODIGO_IBGE_CIDADE` INT UNSIGNED NULL,
-              `CODIGO_IBGE_UF` INT UNSIGNED NULL,
-              `LOGOTIPO` TEXT NULL,
-              `REGISTRADO` CHAR(1) NULL DEFAULT 'P',
-              `NATUREZA_JURIDICA` VARCHAR(200) NULL,
-              `SIMEI` CHAR(1) NULL,
-              `EMAIL_PAGAMENTO` VARCHAR(250) NULL,
-              `DATA_REGISTRO` DATE NULL,
-              `HORA_REGISTRO` VARCHAR(8) NULL,
-              PRIMARY KEY (`ID`),
-              UNIQUE KEY `UK_EMPRESA_CNPJ` (`CNPJ`)
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+            CREATE SCHEMA IF NOT EXISTS retaguarda_agendamento;
 
-            CREATE TABLE IF NOT EXISTS `RET_USUARIO` (
-              `ID` INT UNSIGNED NOT NULL AUTO_INCREMENT,
-              `ID_EMPRESA` INT UNSIGNED NOT NULL,
-              `NOME` VARCHAR(150) NULL,
-              `LOGIN` VARCHAR(80) NOT NULL,
-              `EMAIL` VARCHAR(180) NULL,
-              `SENHA_HASH` VARCHAR(128) NOT NULL,
-              `SENHA_SALT` VARCHAR(64) NOT NULL,
-              `PERFIL` VARCHAR(30) NOT NULL DEFAULT 'Administrador',
-              `CONFIRMADO` CHAR(1) NOT NULL DEFAULT 'P',
-              `CONFIRMADO_EM` DATETIME NULL,
-              `ATIVO` CHAR(1) NOT NULL DEFAULT 'S',
-              `CRIADO_EM` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-              `ULTIMO_LOGIN` DATETIME NULL,
-              PRIMARY KEY (`ID`),
-              UNIQUE KEY `UK_RET_USUARIO_EMPRESA_LOGIN` (`ID_EMPRESA`, `LOGIN`),
-              UNIQUE KEY `UK_RET_USUARIO_EMAIL` (`EMAIL`),
-              CONSTRAINT `FK_RET_USUARIO_EMPRESA`
-                FOREIGN KEY (`ID_EMPRESA`) REFERENCES `EMPRESA` (`ID`)
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+            CREATE TABLE IF NOT EXISTS retaguarda_agendamento.empresa (
+              id                  SERIAL PRIMARY KEY,
+              razao_social        VARCHAR(150),
+              nome_fantasia       VARCHAR(150),
+              cnpj                VARCHAR(14),
+              inscricao_estadual  VARCHAR(30),
+              inscricao_municipal VARCHAR(30),
+              tipo_regime         CHAR(1),
+              crt                 CHAR(1),
+              data_constituicao   DATE,
+              tipo                CHAR(1),
+              email               VARCHAR(250),
+              logradouro          VARCHAR(250),
+              numero              VARCHAR(10),
+              complemento         VARCHAR(100),
+              cep                 VARCHAR(8),
+              bairro              VARCHAR(100),
+              cidade              VARCHAR(100),
+              uf                  CHAR(2),
+              fone                VARCHAR(15),
+              contato             VARCHAR(30),
+              codigo_ibge_cidade  INTEGER,
+              codigo_ibge_uf      INTEGER,
+              logotipo            TEXT,
+              registrado          CHAR(1) DEFAULT 'P',
+              natureza_juridica   VARCHAR(200),
+              simei               CHAR(1),
+              email_pagamento     VARCHAR(250),
+              data_registro       DATE,
+              hora_registro       VARCHAR(8),
+              CONSTRAINT uk_empresa_cnpj UNIQUE (cnpj)
+            );
 
-            CREATE TABLE IF NOT EXISTS `RET_SESSAO` (
-              `ID` INT UNSIGNED NOT NULL AUTO_INCREMENT,
-              `ID_USUARIO` INT UNSIGNED NOT NULL,
-              `TOKEN_HASH` VARCHAR(128) NOT NULL,
-              `CRIADO_EM` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-              `EXPIRA_EM` DATETIME NOT NULL,
-              `REVOGADO` CHAR(1) NOT NULL DEFAULT 'N',
-              PRIMARY KEY (`ID`),
-              UNIQUE KEY `UK_RET_SESSAO_TOKEN` (`TOKEN_HASH`),
-              CONSTRAINT `FK_RET_SESSAO_USUARIO`
-                FOREIGN KEY (`ID_USUARIO`) REFERENCES `RET_USUARIO` (`ID`)
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+            CREATE TABLE IF NOT EXISTS retaguarda_agendamento.ret_usuario (
+              id            SERIAL PRIMARY KEY,
+              id_empresa    INTEGER NOT NULL,
+              nome          VARCHAR(150),
+              login         VARCHAR(80) NOT NULL,
+              email         VARCHAR(180),
+              senha_hash    VARCHAR(128) NOT NULL,
+              senha_salt    VARCHAR(64) NOT NULL,
+              perfil        VARCHAR(30) NOT NULL DEFAULT 'Administrador',
+              confirmado    CHAR(1) NOT NULL DEFAULT 'P',
+              confirmado_em TIMESTAMP,
+              ativo         CHAR(1) NOT NULL DEFAULT 'S',
+              criado_em     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              ultimo_login  TIMESTAMP,
+              CONSTRAINT uk_ret_usuario_empresa_login UNIQUE (id_empresa, login),
+              CONSTRAINT uk_ret_usuario_email         UNIQUE (email),
+              CONSTRAINT fk_ret_usuario_empresa FOREIGN KEY (id_empresa)
+                  REFERENCES retaguarda_agendamento.empresa (id)
+            );
 
-            CREATE TABLE IF NOT EXISTS `RET_EMAIL_TOKEN` (
-              `ID` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-              `ID_USUARIO` INT UNSIGNED NOT NULL,
-              `TIPO` VARCHAR(40) NOT NULL,
-              `TOKEN_HASH` VARCHAR(128) NOT NULL,
-              `CRIADO_EM` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-              `EXPIRA_EM` DATETIME NOT NULL,
-              `USADO_EM` DATETIME NULL,
-              PRIMARY KEY (`ID`),
-              INDEX `IX_RET_EMAIL_TOKEN_USUARIO_TIPO` (`ID_USUARIO`, `TIPO`),
-              INDEX `IX_RET_EMAIL_TOKEN_HASH` (`TOKEN_HASH`),
-              CONSTRAINT `FK_RET_EMAIL_TOKEN_USUARIO`
-                FOREIGN KEY (`ID_USUARIO`) REFERENCES `RET_USUARIO` (`ID`)
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;";
+            CREATE TABLE IF NOT EXISTS retaguarda_agendamento.ret_sessao (
+              id         SERIAL PRIMARY KEY,
+              id_usuario INTEGER NOT NULL,
+              token_hash VARCHAR(128) NOT NULL,
+              criado_em  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              expira_em  TIMESTAMP NOT NULL,
+              revogado   CHAR(1) NOT NULL DEFAULT 'N',
+              CONSTRAINT uk_ret_sessao_token UNIQUE (token_hash),
+              CONSTRAINT fk_ret_sessao_usuario FOREIGN KEY (id_usuario)
+                  REFERENCES retaguarda_agendamento.ret_usuario (id)
+            );
 
-        await using var connection = new MySqlConnection(ConnectionString);
+            CREATE TABLE IF NOT EXISTS retaguarda_agendamento.ret_email_token (
+              id         BIGSERIAL PRIMARY KEY,
+              id_usuario INTEGER NOT NULL,
+              tipo       VARCHAR(40) NOT NULL,
+              token_hash VARCHAR(128) NOT NULL,
+              criado_em  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              expira_em  TIMESTAMP NOT NULL,
+              usado_em   TIMESTAMP,
+              CONSTRAINT fk_ret_email_token_usuario FOREIGN KEY (id_usuario)
+                  REFERENCES retaguarda_agendamento.ret_usuario (id)
+            );
+            CREATE INDEX IF NOT EXISTS ix_ret_email_token_usuario_tipo
+                ON retaguarda_agendamento.ret_email_token (id_usuario, tipo);
+            CREATE INDEX IF NOT EXISTS ix_ret_email_token_hash
+                ON retaguarda_agendamento.ret_email_token (token_hash);";
+
+        await using var connection = new NpgsqlConnection(ConnectionString);
         await connection.OpenAsync();
-        await using var command = new MySqlCommand(ddl, connection);
+        await using var command = new NpgsqlCommand(ddl, connection);
         await command.ExecuteNonQueryAsync();
     }
 }
@@ -135,12 +137,12 @@ public sealed class MySqlFixture : IAsyncLifetime
 /// Testes de integraÃ§Ã£o do AuthService â€” cobre login, criaÃ§Ã£o de conta,
 /// recuperaÃ§Ã£o de senha, validaÃ§Ã£o de token e unicidade global de email (multitenant).
 /// </summary>
-public class AuthServiceTests : IClassFixture<MySqlFixture>
+public class AuthServiceTests : IClassFixture<PostgresFixture>
 {
     private readonly AuthService _service;
     private readonly string _cs;
 
-    public AuthServiceTests(MySqlFixture fixture)
+    public AuthServiceTests(PostgresFixture fixture)
     {
         _cs = fixture.ConnectionString;
         _service = Build(_cs);
@@ -718,15 +720,15 @@ public class AuthServiceTests : IClassFixture<MySqlFixture>
 
     private async Task ConfirmarEmpresaEUsuario(string email, string cnpj)
     {
-        await using var conn = new MySqlConnection(_cs);
+        await using var conn = new NpgsqlConnection(_cs);
         await conn.OpenAsync();
 
-        await using var cmd1 = new MySqlCommand(
+        await using var cmd1 = new NpgsqlCommand(
             "UPDATE EMPRESA SET REGISTRADO='S' WHERE CNPJ=@c", conn);
         cmd1.Parameters.AddWithValue("@c", cnpj);
         await cmd1.ExecuteNonQueryAsync();
 
-        await using var cmd2 = new MySqlCommand(
+        await using var cmd2 = new NpgsqlCommand(
             "UPDATE RET_USUARIO SET CONFIRMADO='S' WHERE LOWER(EMAIL)=@e", conn);
         cmd2.Parameters.AddWithValue("@e", email.ToLower());
         await cmd2.ExecuteNonQueryAsync();
@@ -734,9 +736,9 @@ public class AuthServiceTests : IClassFixture<MySqlFixture>
 
     private async Task DesativarUsuario(string email)
     {
-        await using var conn = new MySqlConnection(_cs);
+        await using var conn = new NpgsqlConnection(_cs);
         await conn.OpenAsync();
-        await using var cmd = new MySqlCommand(
+        await using var cmd = new NpgsqlCommand(
             "UPDATE RET_USUARIO SET ATIVO='N' WHERE LOWER(EMAIL)=@e", conn);
         cmd.Parameters.AddWithValue("@e", email.ToLower());
         await cmd.ExecuteNonQueryAsync();
@@ -744,9 +746,9 @@ public class AuthServiceTests : IClassFixture<MySqlFixture>
 
     private async Task AtualizarHashDireto(string email, string senhaHash, string salt)
     {
-        await using var conn = new MySqlConnection(_cs);
+        await using var conn = new NpgsqlConnection(_cs);
         await conn.OpenAsync();
-        await using var cmd = new MySqlCommand(
+        await using var cmd = new NpgsqlCommand(
             "UPDATE RET_USUARIO SET SENHA_HASH=@h, SENHA_SALT=@s WHERE LOWER(EMAIL)=@e", conn);
         cmd.Parameters.AddWithValue("@h", senhaHash);
         cmd.Parameters.AddWithValue("@s", salt);
@@ -756,9 +758,9 @@ public class AuthServiceTests : IClassFixture<MySqlFixture>
 
     private async Task<string> LerHashDireto(string email)
     {
-        await using var conn = new MySqlConnection(_cs);
+        await using var conn = new NpgsqlConnection(_cs);
         await conn.OpenAsync();
-        await using var cmd = new MySqlCommand(
+        await using var cmd = new NpgsqlCommand(
             "SELECT SENHA_HASH FROM RET_USUARIO WHERE LOWER(EMAIL)=@e LIMIT 1", conn);
         cmd.Parameters.AddWithValue("@e", email.ToLower());
         return (await cmd.ExecuteScalarAsync())?.ToString() ?? string.Empty;
@@ -770,10 +772,10 @@ public class AuthServiceTests : IClassFixture<MySqlFixture>
             System.Security.Cryptography.SHA256.HashData(
                 System.Text.Encoding.UTF8.GetBytes(token))).ToLowerInvariant();
 
-        await using var conn = new MySqlConnection(_cs);
+        await using var conn = new NpgsqlConnection(_cs);
         await conn.OpenAsync();
-        await using var cmd = new MySqlCommand(
-            "UPDATE RET_SESSAO SET EXPIRA_EM = DATE_SUB(UTC_TIMESTAMP(), INTERVAL 1 HOUR) WHERE TOKEN_HASH=@h", conn);
+        await using var cmd = new NpgsqlCommand(
+            "UPDATE RET_SESSAO SET EXPIRA_EM = (now() at time zone 'utc') - interval '1 hour' WHERE TOKEN_HASH=@h", conn);
         cmd.Parameters.AddWithValue("@h", hash);
         await cmd.ExecuteNonQueryAsync();
     }
