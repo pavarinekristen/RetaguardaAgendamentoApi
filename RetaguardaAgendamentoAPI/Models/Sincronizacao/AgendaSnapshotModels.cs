@@ -6,6 +6,11 @@ namespace RetaguardaAgendamentoAPI.Models.Sincronizacao
     public class AgendaSnapshotRequest
     {
         public string DispositivoId { get; set; }
+
+        // true somente quando o cliente enviou TODAS as linhas de todas as tabelas.
+        // Snapshots incrementais (padrao) nao permitem inferir exclusao por ausencia.
+        public bool SnapshotCompleto { get; set; }
+
         public List<AgendaSnapshotTable> Tabelas { get; set; } = new List<AgendaSnapshotTable>();
     }
 

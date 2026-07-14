@@ -121,8 +121,9 @@ namespace RetaguardaAgendamentoAPI.Services.Sincronizacao
             _logger.LogInformation("Conexao Postgres administrativa aberta para salvar snapshot. BancoOperacional={BancoOperacional}", operacionalDatabase);
 
             // As tabelas de controle sao criadas pelas migrations (postgres-migrations/001_baseline_schema.sql).
-            // Aqui apenas apontamos o search_path para o schema operacional.
-            await ExecutarAsync(connection, $"SET search_path TO {operacionalDatabase}");
+            // Aqui apenas apontamos o search_path para o schema operacional. "public" entra no
+            // final porque a extensao pg_trgm (gin_trgm_ops dos indices de busca) mora la.
+            await ExecutarAsync(connection, $"SET search_path TO {operacionalDatabase}, public");
             await GarantirTabelasFinaisAsync(connection, tabelas);
 
             await using var transaction = await connection.BeginTransactionAsync();
@@ -189,7 +190,9 @@ namespace RetaguardaAgendamentoAPI.Services.Sincronizacao
                                 tabela.Nome,
                                 registro.Dados);
 
-                    if (_marcarAusentesComoExcluidos)
+                    // So marca ausentes quando o snapshot e completo: num snapshot
+                    // incremental, ausencia significa "sem alteracao", nao exclusao.
+                    if (_marcarAusentesComoExcluidos && request.SnapshotCompleto)
                     {
                         await MarcarAusentesComoExcluidosAsync(
                             connection,

@@ -118,28 +118,47 @@ Aplicar local:
 
 ## Como a sincronizacao funciona
 
-1. WPF grava dados no SQLite.
-2. WPF monta snapshot das tabelas locais.
+1. WPF grava dados no SQLite (todo save carimba `AtualizadoEm`).
+2. WPF monta snapshot **incremental** das tabelas locais: somente registros com
+   `SincronizadoEm IS NULL` ou `AtualizadoEm > SincronizadoEm`.
 3. WPF envia para:
 
 ```text
 POST /sincroniza/agenda/snapshot
 ```
 
-4. API valida token.
-5. API identifica empresa.
-6. API grava no MySQL operacional.
-7. Portal web consulta o MySQL operacional.
+4. O snapshot e dividido em lotes de ate 1000 registros por requisicao
+   (`MaxRegistrosPorLote`), mantendo cada payload em ~1-2 MB. Carga inicial
+   grande (ex.: 48 mil registros importados) sobe em ~48 requisicoes sequenciais.
+5. API valida token.
+6. API identifica empresa.
+7. API grava no MySQL operacional (upsert idempotente por `ID_LOCAL`).
+8. Portal web consulta o MySQL operacional.
+9. Apos cada lote aceito, o WPF marca como sincronizados os IDs daquele lote com
+   `AtualizadoEm <= inicio do snapshot`. Se a conexao cair no meio, o que ja
+   subiu nao e reenviado na proxima tentativa; o que faltou continua pendente.
+
+Snapshot completo:
+
+- `SincronizarAsync(completo: true)` envia todas as linhas e marca o payload com
+  `snapshotCompleto = true`. Uso: recuperacao/recarga do servidor.
+- No servidor, `Sincronizacao:MarcarAusentesComoExcluidos` so atua quando
+  `snapshotCompleto = true` — em snapshot incremental, ausencia significa
+  "sem alteracao", nunca exclusao.
+
+SQLite local roda com `journal_mode=WAL` (aplicado no `MigrateAsync`): leitura da
+tela nao bloqueia a escrita do sync automatico.
 
 ## Estado atual do snapshot
 
 Pontos fortes:
 
 - Funciona genericamente.
+- Envio incremental: payload proporcional ao que mudou, nao ao tamanho do banco.
 - Cria/atualiza tabelas finais conforme payload.
 - Mantem `ID_EMPRESA`.
 - Mantem `ID_LOCAL`.
-- Marca ausentes como excluidos.
+- Marca ausentes como excluidos (somente em snapshot completo).
 - Registra auditoria/outbox.
 
 Pontos fracos:
@@ -147,7 +166,7 @@ Pontos fracos:
 - Ainda aceita tabelas/colunas dinamicas.
 - Precisa de whitelist.
 - Precisa de limites por payload.
-- Precisa reduzir volume de auditoria/outbox em syncs iguais.
+- Sem retencao definida para historico de snapshot/auditoria no servidor.
 
 ## Banco atual da cliente
 

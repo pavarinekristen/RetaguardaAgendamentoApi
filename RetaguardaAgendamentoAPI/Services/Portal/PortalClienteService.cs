@@ -36,9 +36,10 @@ namespace RetaguardaAgendamentoAPI.Services.Portal
                 ?? "agenda_operacional";
 
             // No Postgres o "banco operacional" e um schema; direcionamos via search_path.
+            // "public" entra no final para enxergar a extensao pg_trgm.
             var builder = new NpgsqlConnectionStringBuilder(adminConnection)
             {
-                SearchPath = _schema
+                SearchPath = $"{_schema}, public"
             };
 
             _connectionString = builder.ConnectionString;
