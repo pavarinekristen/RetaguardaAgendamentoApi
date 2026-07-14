@@ -794,10 +794,32 @@ namespace RetaguardaAgendamentoAPI.Services.Sincronizacao
             if (coluna.Equals("DADOS_JSON", StringComparison.OrdinalIgnoreCase))
                 return registro.DadosJson;
             if (coluna.Equals("EXCLUIDO", StringComparison.OrdinalIgnoreCase))
-                return "N";
+                return RegistroMarcadoComoExcluido(registro) ? "S" : "N";
 
             var chave = registro.Dados.Keys.FirstOrDefault(k => NormalizarNomeColuna(k).Equals(coluna, StringComparison.OrdinalIgnoreCase));
             return chave == null ? DBNull.Value : ConverterValorFinal(chave, registro.Dados[chave]);
+        }
+
+        // O campo "Excluido" do desktop viaja no DadosJson, mas o nome normaliza
+        // para a propria coluna de controle EXCLUIDO (e por isso e filtrado das
+        // colunas de dados por EhColunaReservada). Sem este mapeamento o upsert
+        // regravava 'N' e ressuscitava no portal registros excluidos no app.
+        // SQLite envia o booleano como numero (0/1); clientes futuros podem
+        // enviar bool JSON (convertido para "S"/"N") ou texto.
+        internal static bool RegistroMarcadoComoExcluido(IReadOnlyDictionary<string, object> dados)
+        {
+            if (dados == null || !dados.TryGetValue("Excluido", out var valor) || valor == null || valor == DBNull.Value)
+                return false;
+
+            var texto = valor.ToString()?.Trim();
+            return texto == "1"
+                || string.Equals(texto, "S", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(texto, "true", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool RegistroMarcadoComoExcluido(RegistroFinalPreparado registro)
+        {
+            return RegistroMarcadoComoExcluido(registro.Dados);
         }
 
         private static object ConverterValorJson(JsonElement value)
