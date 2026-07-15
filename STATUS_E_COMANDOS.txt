@@ -360,7 +360,7 @@ Entregas:
 - Tabela fora da whitelist: rejeitar com 400 listando o nome.
 - Nao criar mais coluna dinamica; dado desconhecido fica so em DADOS_JSON.
 - Limites: MaxRequestBodySize no Kestrel, maximo de registros por snapshot/tabela em config.
-- Corrigir MarcarAusentesComoExcluidosAsync para nao montar NOT IN gigante (comparar via JOIN com AGENDA_SYNC_REGISTRO da execucao).
+- [RESOLVIDO 15/07/2026] MarcarAusentesComoExcluidosAsync foi removido (codigo morto: cliente nunca envia snapshot completo; exclusao viaja no campo Excluido de cada registro).
 Criterio de aceite:
 - Payload com tabela inventada nao cria nada e retorna erro controlado; sync normal do WPF continua passando.
 

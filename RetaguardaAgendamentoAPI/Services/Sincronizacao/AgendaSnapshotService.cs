@@ -16,7 +16,6 @@ namespace RetaguardaAgendamentoAPI.Services.Sincronizacao
         private readonly string _adminConnectionString;
         private readonly string _retaguardaDatabase;
         private readonly string _operacionalDatabaseOverride;
-        private readonly bool _marcarAusentesComoExcluidos;
         private readonly ILogger<AgendaSnapshotService> _logger;
 
         private static readonly HashSet<string> TabelasIgnoradas = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
@@ -77,10 +76,6 @@ namespace RetaguardaAgendamentoAPI.Services.Sincronizacao
 
             _operacionalDatabaseOverride = Environment.GetEnvironmentVariable("AGENDA_OPERACIONAL_DATABASE")
                 ?? configuration.GetValue<string>("AgendaOperacionalDatabase");
-
-            // Padrao conservador: snapshot incompleto nao deve esconder dados antigos.
-            // Para ativar soft-exclusao, configure Sincronizacao:MarcarAusentesComoExcluidos=true.
-            _marcarAusentesComoExcluidos = configuration.GetValue<bool?>("Sincronizacao:MarcarAusentesComoExcluidos") ?? false;
         }
 
         // Identificador dinamico -> minusculo e com aspas (protege palavras reservadas e casa
@@ -141,9 +136,6 @@ namespace RetaguardaAgendamentoAPI.Services.Sincronizacao
                 foreach (var tabela in tabelas)
                 {
                     var registrosPreparados = PrepararRegistrosFinais(tabela);
-                    var idsAtivos = registrosPreparados
-                        .Select(r => r.IdLocal)
-                        .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
                     await RegistrarSnapshotsBatchAsync(
                         connection,
@@ -190,19 +182,11 @@ namespace RetaguardaAgendamentoAPI.Services.Sincronizacao
                                 tabela.Nome,
                                 registro.Dados);
 
-                    // So marca ausentes quando o snapshot e completo: num snapshot
-                    // incremental, ausencia significa "sem alteracao", nao exclusao.
-                    if (_marcarAusentesComoExcluidos && request.SnapshotCompleto)
-                    {
-                        await MarcarAusentesComoExcluidosAsync(
-                            connection,
-                            (NpgsqlTransaction)transaction,
-                            empresaId,
-                            dispositivoId,
-                            tabela.Nome,
-                            idsAtivos,
-                            agora);
-                    }
+                    // Exclusao NUNCA e inferida por ausencia: o cliente envia em
+                    // lotes (cada request e parcial por definicao) e a exclusao
+                    // chega pelo campo Excluido do proprio registro. A regra
+                    // "ausentes = excluidos" (snapshotCompleto) foi removida por
+                    // ser inalcancavel no fluxo real; ver historico do git.
                 }
 
                 await RegistrarDispositivoAsync(
@@ -439,43 +423,6 @@ namespace RetaguardaAgendamentoAPI.Services.Sincronizacao
 
                 await command.ExecuteNonQueryAsync();
             }
-        }
-
-        private static async Task MarcarAusentesComoExcluidosAsync(
-            NpgsqlConnection connection,
-            NpgsqlTransaction transaction,
-            int empresaId,
-            string dispositivoId,
-            string nomeTabela,
-            HashSet<string> idsAtivos,
-            DateTime agora)
-        {
-            if (nomeTabela.StartsWith("AGENDA_SYNC_", StringComparison.OrdinalIgnoreCase))
-                return;
-
-            var parametros = idsAtivos.Select((_, index) => $"@id{index}").ToList();
-            var filtroIds = idsAtivos.Count == 0
-                ? string.Empty
-                : $"AND ID_LOCAL NOT IN ({string.Join(", ", parametros)})";
-
-            var sql = $@"
-                UPDATE {Ident(nomeTabela)}
-                   SET EXCLUIDO = 'S',
-                       SINCRONIZADO_EM = @agora
-                 WHERE ID_EMPRESA = @empresaId
-                   AND DISPOSITIVO_ID = @dispositivoId
-                   {filtroIds}";
-
-            await using var command = new NpgsqlCommand(sql, connection, transaction);
-            command.Parameters.AddWithValue("@agora", agora);
-            command.Parameters.AddWithValue("@empresaId", empresaId);
-            command.Parameters.AddWithValue("@dispositivoId", dispositivoId);
-
-            var i = 0;
-            foreach (var id in idsAtivos)
-                command.Parameters.AddWithValue($"@id{i++}", id);
-
-            await command.ExecuteNonQueryAsync();
         }
 
         private async Task AplicarEmpresaAdministrativaAsync(
@@ -741,7 +688,7 @@ namespace RetaguardaAgendamentoAPI.Services.Sincronizacao
             return colunas.ToList();
         }
 
-        private static Dictionary<string, object> LerDados(string dadosJson)
+        internal static Dictionary<string, object> LerDados(string dadosJson)
         {
             var dados = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
             if (string.IsNullOrWhiteSpace(dadosJson))

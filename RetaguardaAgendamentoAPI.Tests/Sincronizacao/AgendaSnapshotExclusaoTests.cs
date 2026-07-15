@@ -55,8 +55,24 @@ public class AgendaSnapshotExclusaoTests
     public void ValorNuloOuDBNull_NaoMarcaExcluido()
     {
         Assert.False(AgendaSnapshotService.RegistroMarcadoComoExcluido(
-            new Dictionary<string, object> { ["Excluido"] = null }));
+            new Dictionary<string, object> { ["Excluido"] = null! }));
         Assert.False(AgendaSnapshotService.RegistroMarcadoComoExcluido(
             new Dictionary<string, object> { ["Excluido"] = DBNull.Value }));
+    }
+
+    // Fecha o circuito com o payload real: o SQLite envia o booleano como
+    // NUMERO JSON (0/1), e o caminho LerDados -> RegistroMarcadoComoExcluido
+    // precisa reconhecer, alem das variantes bool/texto de clientes futuros.
+    [Theory]
+    [InlineData(@"{""Nome"":""Cliente"",""Excluido"":1}", true)]
+    [InlineData(@"{""Nome"":""Cliente"",""Excluido"":0}", false)]
+    [InlineData(@"{""Nome"":""Cliente"",""Excluido"":true}", true)]
+    [InlineData(@"{""Nome"":""Cliente"",""Excluido"":false}", false)]
+    [InlineData(@"{""Nome"":""Cliente"",""Excluido"":""S""}", true)]
+    [InlineData(@"{""Nome"":""Cliente""}", false)]
+    public void JsonRealAtravessandoLerDados_MarcaExcluidoCorretamente(string dadosJson, bool esperado)
+    {
+        var dados = AgendaSnapshotService.LerDados(dadosJson);
+        Assert.Equal(esperado, AgendaSnapshotService.RegistroMarcadoComoExcluido(dados));
     }
 }

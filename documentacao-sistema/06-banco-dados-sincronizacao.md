@@ -140,11 +140,13 @@ POST /sincroniza/agenda/snapshot
 
 Snapshot completo:
 
-- `SincronizarAsync(completo: true)` envia todas as linhas e marca o payload com
-  `snapshotCompleto = true`. Uso: recuperacao/recarga do servidor.
-- No servidor, `Sincronizacao:MarcarAusentesComoExcluidos` so atua quando
-  `snapshotCompleto = true` — em snapshot incremental, ausencia significa
-  "sem alteracao", nunca exclusao.
+- `SincronizarAsync(completo: true)` reenvia todas as linhas, mas SEMPRE em
+  lotes parciais — nenhum request afirma "snapshot completo". Uso:
+  recuperacao/recarga do servidor (o upsert e idempotente).
+- Exclusao nunca e inferida por ausencia: ela viaja no campo `Excluido` de
+  cada registro. A antiga regra "ausentes = excluidos"
+  (`Sincronizacao:MarcarAusentesComoExcluidos` + `snapshotCompleto`) era
+  inalcancavel no fluxo real e foi removida do servidor em 15/07/2026.
 
 SQLite local roda com `journal_mode=WAL` (aplicado no `MigrateAsync`): leitura da
 tela nao bloqueia a escrita do sync automatico.
